@@ -1,42 +1,45 @@
-
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { ObjectStorage } from "../types";
+import { FetchHttpHandler } from "@aws-sdk/fetch-http-handler";
+import type { ObjectStorage } from "../types";
 
 /**
- * Service untuk menangani interaksi dengan S3 Compatible Storage (Vultr)
+ * S3 Service (Browser Safe)
  */
 export const s3Service = {
-  /**
-   * Mengunggah file (Blob) ke S3 dengan ACL public-read
-   */
-  uploadVideoToS3: async (
-    videoBlob: Blob,
-    storage: ObjectStorage,
-    bucket: string,
-    filename: string
-  ): Promise<string> => {
-    console.log(`[S3Service] Memulai upload ke ${storage.s3_hostname}/${bucket}/${filename}`);
-    
-    // 1. Inisialisasi S3 Client dengan konfigurasi eksplisit untuk browser
-    // Menghindari default credential provider chain yang mencoba membaca file system (fs.readFile)
+  async uploadVideoToS3(
+      videoBlob: Blob,
+      storage: ObjectStorage,
+      bucket: string,
+      filename: string
+  ): Promise<string> {
+    console.log(
+        `[S3Service] Upload -> https://${storage.s3_hostname}/${bucket}/${filename}`
+    );
+
+    /**
+     * 🔥 INI KUNCI UTAMANYA
+     * Paksa AWS SDK pakai Fetch (browser),
+     * bukan NodeHttpHandler (fs)
+     */
     const client = new S3Client({
-      region: "us-east-1", 
+      region: "us-east-1",
       endpoint: `https://${storage.s3_hostname}`,
+      forcePathStyle: true,
+
       credentials: {
         accessKeyId: storage.s3_access_key,
         secretAccessKey: storage.s3_secret_key,
       },
-      forcePathStyle: true, 
+
+      requestHandler: new FetchHttpHandler({
+        keepAlive: false,
+      }),
     });
 
     try {
-      // 2. Konversi Blob ke Uint8Array (Metode paling aman untuk browser compatibility di AWS SDK v3)
-      const arrayBuffer = await videoBlob.arrayBuffer();
-      const body = new Uint8Array(arrayBuffer);
+      // Blob → Uint8Array (browser safest)
+      const body = new Uint8Array(await videoBlob.arrayBuffer());
 
-      console.log(`[S3Service] Payload size: ${body.length} bytes`);
-
-      // 3. Persiapkan Command Upload dengan ACL public-read
       const command = new PutObjectCommand({
         Bucket: bucket,
         Key: filename,
@@ -45,19 +48,18 @@ export const s3Service = {
         ACL: "public-read",
       });
 
-      // 4. Eksekusi Upload
-      const response = await client.send(command);
-      console.log("[S3Service] Upload Success:", response);
-      
-      // 5. Kembalikan URL publik hasil upload
-      return `https://${storage.s3_hostname}/${bucket}/${filename}`;
-    } catch (error) {
-      console.error("[S3Service] Critical Upload Error:", error);
-      // Deteksi error spesifik unenv / Node compatibility
-      if ((error as any).message?.includes("fs.readFile")) {
-        throw new Error("S3 Client Error: Masalah kompatibilitas browser/bundler. Menggunakan fallback upload mungkin diperlukan.");
-      }
-      throw new Error(`Gagal mengunggah video ke S3: ${(error as Error).message}`);
+      await client.send(command);
+
+      const publicUrl = `https://${storage.s3_hostname}/${bucket}/${filename}`;
+
+      console.log("[S3Service] Upload SUCCESS:", publicUrl);
+
+      return publicUrl;
+    } catch (err: any) {
+      console.error("[S3Service] Upload FAILED:", err);
+      throw new Error(
+          `Gagal mengunggah video ke S3: ${err?.message || err}`
+      );
     }
-  }
+  },
 };

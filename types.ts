@@ -61,7 +61,7 @@ export interface GenerationItem {
   order_index: number;
   status: TaskStatus;
   progress: number;
-  generate_url?: string;
+  generate_urls?: Array<string>;
   failed_reason?: string;
   storyboard_data?: any;
 }
