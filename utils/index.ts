@@ -15,18 +15,30 @@ export const showToast = (message: string, icon: 'success' | 'error' | 'warning'
 };
 
 export const base64ToBlob = (base64: string, contentType: string = 'image/png'): Blob => {
-  const byteCharacters = atob(base64);
-  const byteArrays = [];
-  for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-    const slice = byteCharacters.slice(offset, offset + 512);
-    const byteNumbers = new Array(slice.length);
-    for (let i = 0; i < slice.length; i++) {
-      byteNumbers[i] = slice.charCodeAt(i);
+  // 1. Remove data URL prefix if present
+  const base64Data = base64.includes(',') ? base64.split(',')[1] : base64;
+
+  // 2. Remove whitespace/newlines
+  const sanitizedBase64 = base64Data.replace(/\s/g, '');
+
+  try {
+    const byteCharacters = atob(sanitizedBase64);
+    const byteArrays = [];
+
+    for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+      const slice = byteCharacters.slice(offset, offset + 512);
+      const byteNumbers = new Array(slice.length);
+      for (let i = 0; i < slice.length; i++) {
+        byteNumbers[i] = slice.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      byteArrays.push(byteArray);
     }
-    const byteArray = new Uint8Array(byteNumbers);
-    byteArrays.push(byteArray);
+    return new Blob(byteArrays, { type: contentType });
+  } catch (e) {
+    console.error("Critical: String is not valid Base64", e);
+    throw e;
   }
-  return new Blob(byteArrays, { type: contentType });
 };
 
 /**

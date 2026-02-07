@@ -2,6 +2,7 @@
 // Konfigurasi Environment
 const IS_DEV = true;
 export const USING_DUMMY_DATA = false;
+export const AVG_DURATION_PER_VIDEO = 8; // veo3 generate 8 detik per video
 
 // Lokalisasi Konten
 export const TARGET_CONTENT = "indonesia";

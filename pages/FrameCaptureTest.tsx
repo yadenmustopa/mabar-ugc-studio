@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { captureLastFrameFromVideoBlob } from "../services/frameService";
+import {base64ToBlob} from "@/utils";
 
 export default function FrameCaptureTest() {
     const [image, setImage] = useState<string | null>(null);
@@ -24,6 +25,10 @@ export default function FrameCaptureTest() {
                 (p) => setProgress(p),
                 0.12 // epsilon → detik sebelum akhir
             );
+
+            let blob = base64ToBlob(b64);
+
+            console.log("Captured frame blob:", blob);
 
             setImage(b64);
         } catch (err: any) {

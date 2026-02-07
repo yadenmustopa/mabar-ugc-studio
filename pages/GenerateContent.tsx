@@ -3,8 +3,8 @@ import {mabarApi} from '../services/mabarService';
 import {aiService} from '../services/geminiService';
 import {Character, GenerationItem, ObjectStorage, Product, TaskStatus} from '../types';
 import {base64ToBlob, showToast, urlToBase64} from '../utils';
-import {ASPECT_RATIOS, DEFAULT_MIN_DURATION, RESOLUTIONS, URL_UPLOAD_ASSET} from '../constants';
-import {captureLastFrameFromVideoBlob} from "@/services/frameService.ts";
+import {ASPECT_RATIOS, AVG_DURATION_PER_VIDEO, DEFAULT_MIN_DURATION, RESOLUTIONS, URL_UPLOAD_ASSET} from '../constants';
+import {captureLastFrameFromVideoBlob} from "@/services/frameService";
 
 const GenerateContent: React.FC = () => {
     const [products_list, set_products_list] = useState<Product[]>([]);
@@ -162,7 +162,8 @@ const GenerateContent: React.FC = () => {
                             storyboard_chunks.flatMap(c => c.scenes)
                         );
                         storyboard_chunks.push(chunk);
-                        current_duration += chunk.scenes.reduce((acc, s) => acc + (s.duration || 5), 0);
+                        // current_duration += chunk.scenes.reduce((acc, s) => acc + (s.duration || 5), 0);
+                        current_duration += AVG_DURATION_PER_VIDEO;
                     }
                     await mabarApi.setStoryboard(global_ugc_id!, ugc_item_id, storyboard_chunks);
 
@@ -172,8 +173,6 @@ const GenerateContent: React.FC = () => {
                     let previous_local_video_url = null;
                     let last_video_blob: Blob | null = null;
                     for (let s_idx = 0; s_idx < storyboard_chunks.length; s_idx++) {
-
-
                         if(s_idx === 0) {
                             // IMPROVEMENT: Pass target_chars_with_b64 for consistency and multiple character support
                             const b64 = await aiService.generateFirstSceneImage(
@@ -216,7 +215,13 @@ const GenerateContent: React.FC = () => {
                                 0.12 // epsilon → detik sebelum akhir
                             );
 
-                            await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, base64ToBlob(last_b64_image), s_idx + 1);
+                            console.log("[StartProduction] Last frame base64 for next scene:", last_b64_image);
+
+                            let blob = base64ToBlob(last_b64_image);
+
+                            console.log("[StartProduction] Last frame blob for next scene:", blob);
+
+                            await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
 
                             // generate video by scene image
                             await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
@@ -465,13 +470,15 @@ const GenerateContent: React.FC = () => {
 
                                             <div className="aspect-video bg-slate-900 rounded-2xl flex items-center justify-center border border-white/5 relative overflow-hidden group/vid shadow-inner">
                                                 {item.generate_urls && item.generate_urls.length > 0 ?
-                                                    item.generate_urls.map( (url => (
+                                                    item.generate_urls.map( ((url, index) => (
                                                         <>
                                                             <video key={url} src={url} className="w-full h-full object-cover absolute inset-0" controls playsInline crossOrigin="anonymous" autoPlay={item.status === TaskStatus.COMPLETED} muted loop />
-                                                            <a href={url} download={`Mabar_Studio_Video_${item.order_index}.mp4`} target="_blank" rel="noopener noreferrer" className="flex-1 bg-slate-900 hover:bg-slate-800 border border-white/5 py-2.5 rounded-xl text-[8px] font-black text-slate-300 uppercase tracking-widest flex items-center justify-center space-x-2 transition-all">
-                                                                <i className="fas fa-download text-[7px]"></i>
-                                                                <span>Download Result</span>
-                                                            </a>
+                                                            <div>
+                                                                <a href={url} download={`Mabar_Studio_Video_${item.order_index}_${index}.mp4`} target="_blank" rel="noopener noreferrer" className="flex-1 bg-slate-900 hover:bg-slate-800 border border-white/5 py-2.5 rounded-xl text-[8px] font-black text-slate-300 uppercase tracking-widest flex items-center justify-center space-x-2 transition-all">
+                                                                    <i className="fas fa-download text-[7px]"></i>
+                                                                    <span>Download Result</span>
+                                                                </a>
+                                                            </div>
                                                         </>
                                                     ))
                                                 ) : (
