@@ -22,6 +22,8 @@ export const aiService = {
    * Menghasilkan potongan storyboard JSON menggunakan Structured Output.
    */
   generateStoryboardChunk: async (data: any, existing_scenes: StoryboardScene[] = [], retryCount = 0): Promise<StoryboardJSON> => {
+    let apiKey = getEffectiveApiKey();
+    console.log("[GeminiService] Using API Key Prefix:", apiKey ? apiKey.slice(0, 8) + "..." : "No Key");
     const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
     const MAX_RETRIES = 2;
 
@@ -258,7 +260,8 @@ TUGAS: Lanjutkan ke Adegan ${totalScenes + 1}. Pastikan transisi smooth dari "Po
    */
   generateVideoVeo: async (image_base64: string, prompt_text: string, aspect_ratio: string, characters: Character[] = []) => {
     const current_key = getEffectiveApiKey();
-    const ai = new GoogleGenAI({ apiKey: current_key });
+    console.log("[GeminiService] Using API Key Prefix:", current_key ? current_key.slice(0, 8) + "..." : "No Key");
+    const ai = new GoogleGenAI({apiKey:current_key});
 
     let mimeType = getMimeTypeFromBase64(image_base64);
     if (!mimeType.startsWith('image/')) {

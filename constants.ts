@@ -17,8 +17,10 @@ export const URL_UPLOAD_ASSET = IS_DEV ? `${BASE_URL_MABAR}/proxy/fetch` : `${BA
  */
 export const MODELS = {
   STORYBOARD: 'gemini-3-flash-preview',
+  // STORYBOARD: 'gemini-2.5-flash',
   IMAGE: 'gemini-2.5-flash-image',
-  VIDEO: 'veo-3.1-fast-generate-preview'
+  // VIDEO: 'veo-3.1-fast-generate-preview',
+  VIDEO:  'veo-3.0-fast-generate-001',
 };
 
 export const RESOLUTIONS = [
