@@ -2,6 +2,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { MODELS, TARGET_CONTENT } from "../constants";
 import { StoryboardJSON, StoryboardScene, Character } from "../types";
+import {getMimeTypeFromBase64} from "@/utils";
 
 const getEffectiveApiKey = (): string => {
   return process.env.API_KEY || '';
@@ -24,9 +25,21 @@ export const aiService = {
     const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
     const MAX_RETRIES = 2;
 
-    const context_scenes = existing_scenes.length > 0
-        ? `Lanjutkan cerita secara logis dari adegan terakhir. Total adegan sebelumnya: ${existing_scenes.length}.`
-        : "Ini adalah awal video.";
+    // Di dalam generateStoryboardChunk
+    const lastScenes = existing_scenes.slice(-2); // Cukup 2 adegan terakhir
+    const totalScenes = existing_scenes.length;
+
+    const context_scenes = lastScenes.length > 0
+        ? `
+CONTEXT KONTINUITAS (Penting untuk visual):
+Total adegan yang sudah dibuat: ${totalScenes}.
+Adegan Terakhir (Adegan ${totalScenes}):
+- Setting: ${lastScenes[lastScenes.length - 1].setting}
+- Posisi Karakter: ${lastScenes[lastScenes.length - 1].ending}
+- Style Visual: ${lastScenes[lastScenes.length - 1].style}
+
+TUGAS: Lanjutkan ke Adegan ${totalScenes + 1}. Pastikan transisi smooth dari "Posisi Karakter" di atas.`
+        : "Mulai video dari Adegan 1.";
 
     const prompt = `Bertindaklah sebagai sutradara iklan kelas dunia. Buat storyboard video UGC (User Generated Content) premium.
     
@@ -81,6 +94,10 @@ export const aiService = {
                   properties: {
                     scene_number: { type: Type.INTEGER },
                     duration: { type: Type.NUMBER },
+                    veo_visual_prompt: {
+                      type: Type.STRING,
+                      description: "Gabungkan setting, lighting, dan motion menjadi 1 kalimat deskriptif dalam Bahasa Inggris untuk AI Video."
+                    },
                     style: { type: Type.STRING },
                     setting: { type: Type.STRING },
                     characters: {
@@ -112,7 +129,7 @@ export const aiService = {
                     text: { type: Type.STRING },
                     keywords: { type: Type.ARRAY, items: { type: Type.STRING } }
                   },
-                  required: ["scene_number", "duration", "actions", "setting", "elements"]
+                  required: ["scene_number", "duration", "veo_visual_prompt", "actions", "setting", "elements"]
                 }
               },
               metadata_content: {
@@ -243,6 +260,15 @@ export const aiService = {
     const current_key = getEffectiveApiKey();
     const ai = new GoogleGenAI({ apiKey: current_key });
 
+    let mimeType = getMimeTypeFromBase64(image_base64);
+    if (!mimeType.startsWith('image/')) {
+      throw new Error("Tipe data gambar tidak dikenali atau tidak valid.");
+    }
+
+    // 1. BERSIHKAN BASE64 (Sangat Penting!)
+    // Menghapus prefix "data:image/jpeg;base64," jika ada
+    const cleanBase64 = image_base64.includes(',') ? image_base64.split(',')[1] : image_base64;
+
     const audio_directives = `
     [AUDIO CHARACTERISTICS & VOCAL DESIGN]
     - Vocal Realism: High-fidelity natural human speech, relaxed (santai) and authentic tone.
@@ -259,7 +285,7 @@ export const aiService = {
       let operation = await ai.models.generateVideos({
         model: MODELS.VIDEO,
         prompt: final_enhanced_prompt,
-        image: { imageBytes: image_base64, mimeType: 'image/png' },
+        image: { imageBytes: cleanBase64, mimeType: 'image/png' },
         config: { numberOfVideos: 1, resolution: '720p', aspectRatio: aspect_ratio as any }
       });
 
@@ -284,4 +310,6 @@ export const aiService = {
       throw new Error(translateGeminiError(e));
     }
   }
+
+
 };

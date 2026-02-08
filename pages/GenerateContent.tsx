@@ -2,7 +2,7 @@ import React, {useEffect, useState} from 'react';
 import {mabarApi} from '../services/mabarService';
 import {aiService} from '../services/geminiService';
 import {Character, GenerationItem, ObjectStorage, Product, TaskStatus} from '../types';
-import {base64ToBlob, showToast, urlToBase64} from '../utils';
+import {base64ToBlob, getMimeTypeFromBase64, showToast, urlToBase64} from '../utils';
 import {ASPECT_RATIOS, AVG_DURATION_PER_VIDEO, DEFAULT_MIN_DURATION, RESOLUTIONS, URL_UPLOAD_ASSET} from '../constants';
 import {captureLastFrameFromVideoBlob} from "@/services/frameService";
 
@@ -182,12 +182,23 @@ const GenerateContent: React.FC = () => {
                                 form_data.aspect_ratio
                             );
 
-                            await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, base64ToBlob(b64), s_idx + 1);
+                            let mimeType = getMimeTypeFromBase64(b64);
+
+                            let blob = base64ToBlob(b64, mimeType);
+
+                            await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
 
                             // generate video by scene image
                             await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
                             set_generations_list(prev => prev.map(g => g.id === temp_id ? { ...g, status: TaskStatus.GENERATING_VIDEO, progress: 70 } : g));
-                            const video_blob = await aiService.generateVideoVeo(b64, storyboard_chunks[s_idx].description, form_data.aspect_ratio);
+
+                            let veo_prompt = ``;
+                            // concat description + map concat scenes.veo_visual_prompt with identity per scene number , exaple scene {scene_number}: {veo_visual_prompt}
+                            veo_prompt += storyboard_chunks[s_idx].description + " ";
+                            veo_prompt += storyboard_chunks[s_idx].scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
+
+                            console.log("[StartProduction] VEO Prompt for first scene video:", veo_prompt);
+                            const video_blob = await aiService.generateVideoVeo(b64, veo_prompt, form_data.aspect_ratio);
 
                             const local_video_url = URL.createObjectURL(video_blob);
 
@@ -215,9 +226,11 @@ const GenerateContent: React.FC = () => {
                                 0.12 // epsilon → detik sebelum akhir
                             );
 
+                            let mimeType = getMimeTypeFromBase64(last_b64_image);
+
                             console.log("[StartProduction] Last frame base64 for next scene:", last_b64_image);
 
-                            let blob = base64ToBlob(last_b64_image);
+                            let blob = base64ToBlob(last_b64_image, mimeType);
 
                             console.log("[StartProduction] Last frame blob for next scene:", blob);
 
@@ -226,7 +239,17 @@ const GenerateContent: React.FC = () => {
                             // generate video by scene image
                             await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
                             set_generations_list(prev => prev.map(g => g.id === temp_id ? { ...g, status: TaskStatus.GENERATING_VIDEO, progress: 70 } : g));
-                            const video_blob = await aiService.generateVideoVeo(last_b64_image, storyboard_chunks[s_idx].description, form_data.aspect_ratio);
+
+                            const currentScene = storyboard_chunks[s_idx];
+
+                            let veoPrompt = ``;
+                            veoPrompt += currentScene.description + " ";
+                            veoPrompt += currentScene.scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
+
+                            let scene_index = s_idx + 1;
+                            console.log("[StartProduction] VEO Prompt for next scene video ke :" + scene_index , veoPrompt);
+
+                            const video_blob = await aiService.generateVideoVeo(last_b64_image, veoPrompt, form_data.aspect_ratio);
 
                             const local_video_url = URL.createObjectURL(video_blob);
 

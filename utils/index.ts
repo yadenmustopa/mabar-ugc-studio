@@ -93,3 +93,9 @@ export const resizeImageToAspectRatio = async (imageUrl: string, aspectRatio: st
     img.src = `${imageUrl}${imageUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
   });
 };
+
+export const getMimeTypeFromBase64 = (base64String: string): string => {
+  // Mencari pattern antara "data:" dan ";base64"
+  const match = base64String.match(/^data:([^;]+);base64,/);
+  return match ? match[1] : 'image/jpeg'; // Default ke jpeg jika tidak ditemukan
+};

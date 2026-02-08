@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { captureLastFrameFromVideoBlob } from "../services/frameService";
-import {base64ToBlob} from "@/utils";
+import {base64ToBlob, getMimeTypeFromBase64} from "@/utils";
 
 export default function FrameCaptureTest() {
     const [image, setImage] = useState<string | null>(null);
@@ -26,7 +26,11 @@ export default function FrameCaptureTest() {
                 0.12 // epsilon → detik sebelum akhir
             );
 
-            let blob = base64ToBlob(b64);
+            let mimeType = getMimeTypeFromBase64(b64);
+
+            console.log("Detected MIME type:", mimeType);
+
+            let blob = base64ToBlob(b64, mimeType);
 
             console.log("Captured frame blob:", blob);
 

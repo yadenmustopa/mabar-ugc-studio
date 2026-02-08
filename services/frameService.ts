@@ -28,19 +28,29 @@ export async function captureLastFrameFromVideoBlob(
 
         video.onseeked = () => {
             onProgress?.(90);
-            if (video.readyState >= 2) {
+            // Gunakan readyState 4 (HAVE_ENOUGH_DATA) agar lebih aman
+            if (video.readyState >= 3) {
                 try {
                     const canvas = document.createElement("canvas");
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                     const ctx = canvas.getContext("2d");
+
                     if (ctx && video.videoWidth > 0) {
                         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                        const base64 = canvas.toDataURL("image/jpeg", 0.8);
+                        const base64 = canvas.toDataURL("image/jpeg", 0.9); // Kualitas 0.9 lebih stabil
+
+                        // Validasi: Jika string base64 terlalu pendek, frame mungkin gagal/blank
+                        if (base64.length < 1000) {
+                            console.warn("Frame terdeteksi kosong, retrying...");
+                            retry();
+                            return;
+                        }
+
                         cleanup();
                         resolve(base64);
                     } else {
-                        throw new Error("Invalid Frame");
+                        retry();
                     }
                 } catch (e) {
                     retry();
