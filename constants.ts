@@ -8,7 +8,7 @@ export const AVG_DURATION_PER_VIDEO = 8; // veo3 generate 8 detik per video
 export const TARGET_CONTENT = "indonesia";
 
 // Base URL untuk aset dan API
-export const BASE_URL_MABAR = IS_DEV ? "https://12800d7eb670.ngrok-free.app" : "https://mabar.bharatainternasional.com";
+export const BASE_URL_MABAR = IS_DEV ? "https://pop-os.taileb15cf.ts.net" : "https://mabar.bharatainternasional.com";
 export const API_BASE_URL = IS_DEV ? `${BASE_URL_MABAR}/api/v3/ai_studio` : `${BASE_URL_MABAR}/api/v2/ai_studio`;
 export const URL_UPLOAD_ASSET = IS_DEV ? `${BASE_URL_MABAR}/proxy/fetch` : `${BASE_URL_MABAR}/proxy/fetch`;
 
@@ -22,6 +22,11 @@ export const MODELS = {
   // VIDEO: 'veo-3.1-fast-generate-preview',
   VIDEO:  'veo-3.0-fast-generate-001',
 };
+
+export const MODEL_VIDEOS = {
+  'veo-3.0' : 'veo-3.0-fast-generate-001',
+  'veo-3.1' : 'veo-3.1-fast-generate-preview',
+}
 
 export const RESOLUTIONS = [
   { value: '720p', label: '720p (HD)' },

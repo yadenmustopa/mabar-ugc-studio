@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { MODELS, TARGET_CONTENT } from "../constants";
+import {MODEL_VIDEOS, MODELS, TARGET_CONTENT} from "../constants";
 import { StoryboardJSON, StoryboardScene, Character } from "../types";
 import {getMimeTypeFromBase64} from "@/utils";
 
@@ -258,7 +258,7 @@ TUGAS: Lanjutkan ke Adegan ${totalScenes + 1}. Pastikan transisi smooth dari "Po
   /**
    * Menghasilkan video menggunakan Veo 3.1.
    */
-  generateVideoVeo: async (image_base64: string, prompt_text: string, aspect_ratio: string, characters: Character[] = []) => {
+  generateVideoVeo31: async (image_base64: string, prompt_text: string, aspect_ratio: string, characters: Character[] = []) => {
     const current_key = getEffectiveApiKey();
     console.log("[GeminiService] Using API Key Prefix:", current_key ? current_key.slice(0, 8) + "..." : "No Key");
     const ai = new GoogleGenAI({apiKey:current_key});
@@ -286,9 +286,9 @@ TUGAS: Lanjutkan ke Adegan ${totalScenes + 1}. Pastikan transisi smooth dari "Po
 
     try {
       let operation = await ai.models.generateVideos({
-        model: MODELS.VIDEO,
+        model: MODEL_VIDEOS['veo-3.1'],
         prompt: final_enhanced_prompt,
-        image: { imageBytes: cleanBase64, mimeType: 'image/png' },
+        image: { imageBytes: cleanBase64, mimeType: mimeType },
         config: { numberOfVideos: 1, resolution: '720p', aspectRatio: aspect_ratio as any }
       });
 
@@ -312,7 +312,86 @@ TUGAS: Lanjutkan ke Adegan ${totalScenes + 1}. Pastikan transisi smooth dari "Po
     } catch (e: any) {
       throw new Error(translateGeminiError(e));
     }
+  },
+
+  /**
+   * Menghasilkan video menggunakan Veo 3.0 Fast (TEXT → VIDEO).
+   * Output: SILENT CINEMATIC VIDEO (no audio, no speech)
+   */
+  generateVideoVeo30: async (
+      prompt_text: string,
+      aspect_ratio: string
+  ) => {
+    const current_key = getEffectiveApiKey();
+    console.log(
+        "[GeminiService] Using API Key Prefix:",
+        current_key ? current_key.slice(0, 8) + "..." : "No Key"
+    );
+
+    const ai = new GoogleGenAI({ apiKey: current_key });
+
+    /**
+     * ⚠️ VISUAL-ONLY DIRECTIVES (AMAN UNTUK VEO)
+     */
+    const visual_directives = `
+[VISUAL CINEMATIC DIRECTIVES]
+- Silent cinematic video (NO audio, NO dialogue, NO speech)
+- Storytelling through facial expressions and body language only
+- Natural lighting, realistic motion, smooth camera movement
+- Cinematic composition, shallow depth of field, film-like quality
+- Emotion conveyed visually, without text or sound
+`;
+
+    const final_prompt = `
+${prompt_text}
+
+${visual_directives}
+`;
+
+    try {
+      // 🎬 TEXT → VIDEO (VALID UNTUK veo-3.0-fast-generate-001)
+      let operation = await ai.models.generateVideos({
+        model: "veo-3.0-fast-generate-001",
+        prompt: final_prompt,
+        config: {
+          numberOfVideos: 1,
+          resolution: "720p",
+          aspectRatio: aspect_ratio as any,
+        },
+      });
+
+      // ⏳ Polling long-running operation
+      while (!operation.done) {
+        await new Promise(resolve => setTimeout(resolve, 8000));
+        operation = await ai.operations.getVideosOperation({ operation });
+      }
+
+      // 🚨 Safety filter check
+      const rai_reasons =
+          (operation.response as any)?.raiMediaFilteredReasons;
+
+      if (Array.isArray(rai_reasons) && rai_reasons.length > 0) {
+        throw new Error(
+            `RAI Filter Aktif: ${rai_reasons.join(". ")}`
+        );
+      }
+
+      // 📥 Download video
+      const download_link =
+          operation.response?.generatedVideos?.[0]?.video?.uri;
+
+      if (!download_link) {
+        throw new Error("Link unduhan video tidak ditemukan.");
+      }
+
+      const response = await fetch(`${download_link}&key=${current_key}`);
+      if (!response.ok) {
+        throw new Error("Gagal mengunduh video hasil sintesis.");
+      }
+
+      return await response.blob();
+    } catch (e: any) {
+      throw new Error(translateGeminiError(e));
+    }
   }
-
-
 };

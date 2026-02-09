@@ -39,6 +39,8 @@ const App: React.FC = () => {
 
   const getAiStudio = () => (window as any).aistudio;
 
+  console.log("USING_DUMMY_DATA:", USING_DUMMY_DATA);
+
   const update_key_status = useCallback(async () => {
     const manual_key = localStorage.getItem('api_key_override');
     if (manual_key) {
@@ -48,58 +50,59 @@ const App: React.FC = () => {
       return;
     }
 
-    const ai_studio = getAiStudio();
-    if (ai_studio?.hasSelectedApiKey) {
-      try {
-        const has_key = await ai_studio.hasSelectedApiKey();
-        set_is_key_selected(has_key);
-
-        if (has_key && process.env.API_KEY) {
-          const full_key = process.env.API_KEY;
-          set_api_key_hint(full_key.slice(-4));
-          try {
-            const remote_keys = await mabarApi.getApiKeys();
-            const matched_key = remote_keys.find(k => full_key.startsWith(k.key_prefix));
-            set_api_key_label(matched_key ? matched_key.label : 'Generative Project');
-          } catch (e) {
-            set_api_key_label('Generative Project');
-          }
-        } else {
-          set_api_key_hint('');
-          set_api_key_label('Belum Terdeteksi');
-        }
-      } catch (err) {
-        set_is_key_selected(false);
-      }
-    } else {
-      set_is_key_selected(!!process.env.API_KEY);
-      set_api_key_hint(process.env.API_KEY ? process.env.API_KEY.slice(-4) : '');
-      set_api_key_label('Developer Sandbox');
-    }
+    // const ai_studio = getAiStudio();
+    // if (ai_studio?.hasSelectedApiKey) {
+    //   try {
+    //     const has_key = await ai_studio.hasSelectedApiKey();
+    //     set_is_key_selected(has_key);
+    //
+    //     if (has_key && process.env.API_KEY) {
+    //       const full_key = process.env.API_KEY;
+    //       set_api_key_hint(full_key.slice(-4));
+    //       try {
+    //         const remote_keys = await mabarApi.getApiKeys();
+    //         const matched_key = remote_keys.find(k => full_key.startsWith(k.key_prefix));
+    //         set_api_key_label(matched_key ? matched_key.label : 'Generative Project');
+    //       } catch (e) {
+    //         set_api_key_label('Generative Project');
+    //       }
+    //     } else {
+    //       set_api_key_hint('');
+    //       set_api_key_label('Belum Terdeteksi');
+    //     }
+    //   } catch (err) {
+    //     set_is_key_selected(false);
+    //   }
+    // } else {
+    //   set_is_key_selected(!!process.env.API_KEY);
+    //   set_api_key_hint(process.env.API_KEY ? process.env.API_KEY.slice(-4) : '');
+    //   set_api_key_label('Developer Sandbox');
+    // }
   }, []);
 
-  const handle_google_callback = useCallback((response: any) => {
-    if (response.credential) {
-      set_google_id_token(response.credential);
-      showToast("Identity Verified", "success");
-    }
-  }, []);
+  // const handle_google_callback = useCallback((response: any) => {
+  //   if (response.credential) {
+  //     set_google_id_token(response.credential);
+  //     showToast("Identity Verified", "success");
+  //   }
+  // }, []);
 
-  const init_google_identity = useCallback(() => {
-    if (typeof google !== 'undefined' && GOOGLE_CLIENT_ID) {
-      try {
-        google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          callback: handle_google_callback,
-          auto_select: false,
-          ux_mode: 'popup'
-        });
-      } catch (err) { console.error(err); }
-    }
-  }, [handle_google_callback]);
+  // const init_google_identity = useCallback(() => {
+  //   if (typeof google !== 'undefined' && GOOGLE_CLIENT_ID) {
+  //     try {
+  //       google.accounts.id.initialize({
+  //         client_id: GOOGLE_CLIENT_ID,
+  //         callback: handle_google_callback,
+  //         auto_select: false,
+  //         ux_mode: 'popup'
+  //       });
+  //     } catch (err) { console.error(err); }
+  //   }
+  // }, [handle_google_callback]);
 
   const check_auth = useCallback(async (show_success_toast = false) => {
     const token = localStorage.getItem('token-mabar');
+    console.log("[App] Checking Auth, token present:", !!token);
 
     if (!USING_DUMMY_DATA && !token) {
       set_user_profile(null);
@@ -132,16 +135,16 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    update_key_status();
+    // update_key_status();
     check_auth();
-    const check_google = setInterval(() => {
-      if (typeof google !== 'undefined') {
-        init_google_identity();
-        clearInterval(check_google);
-      }
-    }, 500);
-    return () => clearInterval(check_google);
-  }, [init_google_identity, update_key_status, check_auth]);
+    // const check_google = setInterval(() => {
+    //   if (typeof google !== 'undefined') {
+    //     init_google_identity();
+    //     clearInterval(check_google);
+    //   }
+    // }, 500);
+    // return () => clearInterval(check_google);
+  }, [ update_key_status]);
 
   if (is_loading) {
     return (

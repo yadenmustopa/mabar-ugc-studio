@@ -41,9 +41,9 @@ export interface Character {
 
 export interface ApiKey {
   id: number;
-  label: string;
-  key_prefix: string;
-  is_active: boolean;
+  key_name: string;
+  key_value: string;
+  is_active: boolean|number;
 }
 
 export interface ObjectStorage {

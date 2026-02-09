@@ -125,76 +125,76 @@ const Header: React.FC<HeaderProps> = ({
       </div>
 
       <div className="flex items-center space-x-4">
-        <div className="relative">
-          <button 
-            onClick={() => {
-              set_active_dropdown(active_dropdown === 'key' ? null : 'key');
-              set_show_manual_input(false);
-            }}
-            className={`flex items-center space-x-4 px-5 py-2.5 rounded-xl border transition-all ${active_dropdown === 'key' ? 'bg-slate-800 border-white/20' : 'bg-slate-800/50 border-white/5 hover:border-white/10'}`}
-          >
-            <i className={`fas fa-key text-xs ${has_any_key ? 'text-emerald-500' : 'text-rose-500 animate-pulse'}`}></i>
-            <span className={`text-[10px] font-black uppercase tracking-widest ${has_any_key ? 'text-slate-100' : 'text-rose-400'}`}>
-              {has_any_key ? `GEMINI KEY : ....${display_hint || '???'}` : 'BELUM ADA GEMINI KEY'}
-            </span>
-            <i className="fas fa-chevron-down text-[8px] opacity-40"></i>
-          </button>
+        {/*<div className="relative">*/}
+        {/*  <button */}
+        {/*    onClick={() => {*/}
+        {/*      set_active_dropdown(active_dropdown === 'key' ? null : 'key');*/}
+        {/*      set_show_manual_input(false);*/}
+        {/*    }}*/}
+        {/*    className={`flex items-center space-x-4 px-5 py-2.5 rounded-xl border transition-all ${active_dropdown === 'key' ? 'bg-slate-800 border-white/20' : 'bg-slate-800/50 border-white/5 hover:border-white/10'}`}*/}
+        {/*  >*/}
+        {/*    <i className={`fas fa-key text-xs ${has_any_key ? 'text-emerald-500' : 'text-rose-500 animate-pulse'}`}></i>*/}
+        {/*    <span className={`text-[10px] font-black uppercase tracking-widest ${has_any_key ? 'text-slate-100' : 'text-rose-400'}`}>*/}
+        {/*      {has_any_key ? `GEMINI KEY : ....${display_hint || '???'}` : 'BELUM ADA GEMINI KEY'}*/}
+        {/*    </span>*/}
+        {/*    <i className="fas fa-chevron-down text-[8px] opacity-40"></i>*/}
+        {/*  </button>*/}
 
-          {active_dropdown === 'key' && (
-            <div 
-              onClick={prevent_close}
-              className="absolute top-full right-0 mt-3 w-80 bg-slate-800 border border-white/10 rounded-2xl shadow-3xl p-6 z-50 animate-in fade-in slide-in-from-top-2"
-            >
-              <div className="space-y-6">
-                <div>
-                  <h5 className="text-[8px] font-black text-slate-500 uppercase tracking-[0.2em] mb-4">Active Provider</h5>
-                  <div className="space-y-4">
-                    <div className="space-y-1">
-                      <span className="text-[8px] font-black text-slate-600 uppercase">Nama Key :</span>
-                      <p className="text-xs font-bold text-white truncate">{display_label}</p>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-[8px] font-black text-slate-600 uppercase">Gemini Key :</span>
-                      <div className="bg-slate-950 border border-white/5 rounded-xl px-4 py-3 text-[11px] font-mono text-slate-400 truncate">
-                        {is_manual ? manual_api_key : (is_key_selected ? `••••••••••••${key_hint}` : 'Belum ada key aktif')}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+        {/*  {active_dropdown === 'key' && (*/}
+        {/*    <div */}
+        {/*      onClick={prevent_close}*/}
+        {/*      className="absolute top-full right-0 mt-3 w-80 bg-slate-800 border border-white/10 rounded-2xl shadow-3xl p-6 z-50 animate-in fade-in slide-in-from-top-2"*/}
+        {/*    >*/}
+        {/*      <div className="space-y-6">*/}
+        {/*        <div>*/}
+        {/*          <h5 className="text-[8px] font-black text-slate-500 uppercase tracking-[0.2em] mb-4">Active Provider</h5>*/}
+        {/*          <div className="space-y-4">*/}
+        {/*            <div className="space-y-1">*/}
+        {/*              <span className="text-[8px] font-black text-slate-600 uppercase">Nama Key :</span>*/}
+        {/*              <p className="text-xs font-bold text-white truncate">{display_label}</p>*/}
+        {/*            </div>*/}
+        {/*            <div className="space-y-1">*/}
+        {/*              <span className="text-[8px] font-black text-slate-600 uppercase">Gemini Key :</span>*/}
+        {/*              <div className="bg-slate-950 border border-white/5 rounded-xl px-4 py-3 text-[11px] font-mono text-slate-400 truncate">*/}
+        {/*                {is_manual ? manual_api_key : (is_key_selected ? `••••••••••••${key_hint}` : 'Belum ada key aktif')}*/}
+        {/*              </div>*/}
+        {/*            </div>*/}
+        {/*          </div>*/}
+        {/*        </div>*/}
 
-                <div className="pt-2 border-t border-white/5 space-y-3">
-                  {!show_manual_input ? (
-                    <>
-                      <button onClick={() => set_show_manual_input(true)} className="w-full bg-slate-900 hover:bg-slate-950 border border-white/5 text-white py-3.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all flex items-center justify-center space-x-2">
-                        <i className="fas fa-edit text-blue-500"></i>
-                        <span>Pakai Api Key Lain</span>
-                      </button>
-                      <button onClick={handle_native_switch} className="w-full bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 text-blue-400 py-3.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all flex items-center justify-center space-x-2">
-                        <i className="fab fa-google"></i>
-                        <span>Pakai Api Akun Ini (Gmail)</span>
-                      </button>
-                    </>
-                  ) : (
-                    <div className="space-y-4 animate-in slide-in-from-bottom-2 duration-300">
-                      <div className="space-y-1.5">
-                        <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest ml-1 text-left block">Label Key</label>
-                        <input type="text" value={manual_key_name} onChange={e => set_manual_key_name(e.target.value)} className="w-full bg-slate-950 border border-white/5 rounded-lg px-3 py-2 text-xs text-white outline-none focus:ring-1 ring-blue-500" placeholder="e.g. My Personal Key" />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest ml-1 text-left block">API Key Value</label>
-                        <input type="password" value={manual_api_key} onChange={e => set_manual_api_key(e.target.value)} className="w-full bg-slate-950 border border-white/5 rounded-lg px-3 py-2 text-xs text-white outline-none focus:ring-1 ring-blue-500 font-mono" placeholder="AIza..." />
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <button onClick={() => set_show_manual_input(false)} className="bg-slate-700 hover:bg-slate-600 py-2.5 rounded-lg text-[9px] font-black uppercase text-white transition-all">Batal</button>
-                        <button onClick={handle_save_manual_key} className="bg-blue-600 hover:bg-blue-500 py-2.5 rounded-lg text-[9px] font-black uppercase text-white transition-all shadow-lg shadow-blue-600/20">Simpan</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        {/*        <div className="pt-2 border-t border-white/5 space-y-3">*/}
+        {/*          {!show_manual_input ? (*/}
+        {/*            <>*/}
+        {/*              <button onClick={() => set_show_manual_input(true)} className="w-full bg-slate-900 hover:bg-slate-950 border border-white/5 text-white py-3.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all flex items-center justify-center space-x-2">*/}
+        {/*                <i className="fas fa-edit text-blue-500"></i>*/}
+        {/*                <span>Pakai Api Key Lain</span>*/}
+        {/*              </button>*/}
+        {/*              <button onClick={handle_native_switch} className="w-full bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 text-blue-400 py-3.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all flex items-center justify-center space-x-2">*/}
+        {/*                <i className="fab fa-google"></i>*/}
+        {/*                <span>Pakai Api Akun Ini (Gmail)</span>*/}
+        {/*              </button>*/}
+        {/*            </>*/}
+        {/*          ) : (*/}
+        {/*            <div className="space-y-4 animate-in slide-in-from-bottom-2 duration-300">*/}
+        {/*              <div className="space-y-1.5">*/}
+        {/*                <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest ml-1 text-left block">Label Key</label>*/}
+        {/*                <input type="text" value={manual_key_name} onChange={e => set_manual_key_name(e.target.value)} className="w-full bg-slate-950 border border-white/5 rounded-lg px-3 py-2 text-xs text-white outline-none focus:ring-1 ring-blue-500" placeholder="e.g. My Personal Key" />*/}
+        {/*              </div>*/}
+        {/*              <div className="space-y-1.5">*/}
+        {/*                <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest ml-1 text-left block">API Key Value</label>*/}
+        {/*                <input type="password" value={manual_api_key} onChange={e => set_manual_api_key(e.target.value)} className="w-full bg-slate-950 border border-white/5 rounded-lg px-3 py-2 text-xs text-white outline-none focus:ring-1 ring-blue-500 font-mono" placeholder="AIza..." />*/}
+        {/*              </div>*/}
+        {/*              <div className="grid grid-cols-2 gap-3">*/}
+        {/*                <button onClick={() => set_show_manual_input(false)} className="bg-slate-700 hover:bg-slate-600 py-2.5 rounded-lg text-[9px] font-black uppercase text-white transition-all">Batal</button>*/}
+        {/*                <button onClick={handle_save_manual_key} className="bg-blue-600 hover:bg-blue-500 py-2.5 rounded-lg text-[9px] font-black uppercase text-white transition-all shadow-lg shadow-blue-600/20">Simpan</button>*/}
+        {/*              </div>*/}
+        {/*            </div>*/}
+        {/*          )}*/}
+        {/*        </div>*/}
+        {/*      </div>*/}
+        {/*    </div>*/}
+        {/*  )}*/}
+        {/*</div>*/}
 
         <div className="relative">
           <button 

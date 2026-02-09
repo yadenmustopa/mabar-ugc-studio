@@ -1,10 +1,19 @@
-import React, {useEffect, useState} from 'react';
+import React, {useEffect, useState, useRef} from 'react';
 import {mabarApi} from '../services/mabarService';
 import {aiService} from '../services/geminiService';
 import {Character, GenerationItem, ObjectStorage, Product, TaskStatus} from '../types';
 import {base64ToBlob, getMimeTypeFromBase64, showToast, urlToBase64} from '../utils';
-import {ASPECT_RATIOS, AVG_DURATION_PER_VIDEO, DEFAULT_MIN_DURATION, RESOLUTIONS, URL_UPLOAD_ASSET} from '../constants';
+import {
+    API_BASE_URL,
+    ASPECT_RATIOS,
+    AVG_DURATION_PER_VIDEO, BASE_URL_MABAR,
+    DEFAULT_MIN_DURATION,
+    MODEL_VIDEOS,
+    RESOLUTIONS,
+    URL_UPLOAD_ASSET
+} from '../constants';
 import {captureLastFrameFromVideoBlob} from "@/services/frameService";
+import Select2Async from "@/components/Select2Async";
 
 const GenerateContent: React.FC = () => {
     const [products_list, set_products_list] = useState<Product[]>([]);
@@ -25,7 +34,9 @@ const GenerateContent: React.FC = () => {
         aspect_ratio: '9:16',
         min_duration: DEFAULT_MIN_DURATION,
         object_storage_id: '',
-        bucket: ''
+        bucket: '',
+        model_video: MODEL_VIDEOS["veo-3.1"],
+        gemini_api_key_id: null,
     });
 
     useEffect(() => {
@@ -73,7 +84,7 @@ const GenerateContent: React.FC = () => {
     const startProduction = async () => {
         // Validasi input per section agar jelas pesan errornya bagi user
         if (!form_data.name.trim()) {
-            showToast("Judul Campaign wajib diisi", "warning");
+            showToast("Judul wajib diisi", "warning");
             return;
         }
         if (!form_data.product_id) {
@@ -91,6 +102,11 @@ const GenerateContent: React.FC = () => {
         if (!form_data.object_storage_id || !form_data.bucket) {
             showToast("Pilih Storage Server dan Bucket untuk output", "warning");
             return;
+        }
+        if(!form_data.model_video === MODEL_VIDEOS["veo-3.1"]){
+            if(!form_data.gemini_api_key_id){
+                showToast("Pilih API Key Gemini untuk model VEO 3.1", "warning");
+            }
         }
 
         setIs_generating(true);
@@ -111,15 +127,18 @@ const GenerateContent: React.FC = () => {
                 aspect_ratio: form_data.aspect_ratio,
                 min_duration: form_data.min_duration,
                 object_storage_id: form_data.object_storage_id,
-                bucket: form_data.bucket
+                bucket: form_data.bucket,
+                model_video : form_data.model_video,
+                gemini_api_key_id: form_data.gemini_api_key_id,
             };
 
             const ugc_response = await mabarApi.initUGC(ugc_payload);
             global_ugc_id = ugc_response.id;
+            set_form_data({...form_data, name: ugc_response.name}); // Injek nama final dari response
 
             const target_product = products_list.find(p => p.id.toString() === form_data.product_id)!;
             const target_chars = characters_list.filter(c => form_data.character_ids.includes(c.id));
-            const target_storage = storages_list.find(s => s.object_storage_id.toString() === form_data.object_storage_id)!;
+            // const target_storage = storages_list.find(s => s.object_storage_id.toString() === form_data.object_storage_id)!;
 
             showToast("Mempersiapkan referensi visual...", "info");
             const product_img_url = target_product.product_reference_image_path
@@ -154,115 +173,255 @@ const GenerateContent: React.FC = () => {
 
                 try {
                     await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.CREATING_STORYBOARD);
-                    let storyboard_chunks: any[] = [];
-                    let current_duration = 0;
-                    while (current_duration < form_data.min_duration) {
-                        const chunk = await aiService.generateStoryboardChunk(
-                            { product: target_product, characters: target_chars, user_prompt: form_data.prompt, negative_prompt: form_data.negative_prompt },
-                            storyboard_chunks.flatMap(c => c.scenes)
-                        );
-                        storyboard_chunks.push(chunk);
-                        // current_duration += chunk.scenes.reduce((acc, s) => acc + (s.duration || 5), 0);
-                        current_duration += AVG_DURATION_PER_VIDEO;
-                    }
+                    let storyboard_chunks: any[] = await storyBoardChunk(target_product, target_chars);
                     await mabarApi.setStoryboard(global_ugc_id!, ugc_item_id, storyboard_chunks);
 
-                    await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_FIRST_SCENE_IMAGE);
-                    set_generations_list(prev => prev.map(g => g.id === temp_id ? { ...g, status: TaskStatus.GENERATING_FIRST_SCENE_IMAGE, progress: 40 } : g));
+                    // if model_video is veo-3.1 required generate first scene image with aiService.generateFirstSceneImageVeo31
 
-                    let previous_local_video_url = null;
-                    let last_video_blob: Blob | null = null;
-                    for (let s_idx = 0; s_idx < storyboard_chunks.length; s_idx++) {
-                        if(s_idx === 0) {
-                            // IMPROVEMENT: Pass target_chars_with_b64 for consistency and multiple character support
-                            const b64 = await aiService.generateFirstSceneImage(
-                                storyboard_chunks[s_idx],
-                                product_b64,
-                                target_chars_with_b64,
-                                form_data.aspect_ratio
-                            );
+                    if(form_data.model_video === MODEL_VIDEOS["veo-3.1"]) {
 
-                            let mimeType = getMimeTypeFromBase64(b64);
+                        await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_FIRST_SCENE_IMAGE);
+                        set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                            ...g,
+                            status: TaskStatus.GENERATING_FIRST_SCENE_IMAGE,
+                            progress: 40
+                        } : g));
 
-                            let blob = base64ToBlob(b64, mimeType);
+                        let previous_local_video_url = null;
+                        let last_video_blob: Blob | null = null;
+                        for (let s_idx = 0; s_idx < storyboard_chunks.length; s_idx++) {
+                            if (s_idx === 0) {
+                                // IMPROVEMENT: Pass target_chars_with_b64 for consistency and multiple character support
+                                const b64 = await aiService.generateFirstSceneImage(
+                                    storyboard_chunks[s_idx],
+                                    product_b64,
+                                    target_chars_with_b64,
+                                    form_data.aspect_ratio
+                                );
 
-                            await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
+                                let mimeType = getMimeTypeFromBase64(b64);
 
-                            // generate video by scene image
-                            await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
-                            set_generations_list(prev => prev.map(g => g.id === temp_id ? { ...g, status: TaskStatus.GENERATING_VIDEO, progress: 70 } : g));
+                                let blob = base64ToBlob(b64, mimeType);
 
-                            let veo_prompt = ``;
-                            // concat description + map concat scenes.veo_visual_prompt with identity per scene number , exaple scene {scene_number}: {veo_visual_prompt}
-                            veo_prompt += storyboard_chunks[s_idx].description + " ";
-                            veo_prompt += storyboard_chunks[s_idx].scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
+                                await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
 
-                            console.log("[StartProduction] VEO Prompt for first scene video:", veo_prompt);
-                            const video_blob = await aiService.generateVideoVeo(b64, veo_prompt, form_data.aspect_ratio);
+                                // generate video by scene image
+                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
+                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                                    ...g,
+                                    status: TaskStatus.GENERATING_VIDEO,
+                                    progress: 70
+                                } : g));
 
-                            const local_video_url = URL.createObjectURL(video_blob);
+                                let veo_prompt = ``;
+                                // concat description + map concat scenes.veo_visual_prompt with identity per scene number , exaple scene {scene_number}: {veo_visual_prompt}
+                                veo_prompt += storyboard_chunks[s_idx].description + " ";
+                                veo_prompt += storyboard_chunks[s_idx].scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
 
-                            // add generate_urls to generation item with push (append)
-                            // get current generate_urls
-                            const current_item = generations_list.find(g => g.id === temp_id);
+                                console.log("[StartProduction] VEO Prompt for first scene video:", veo_prompt);
+                                const video_blob = await aiService.generateVideoVeo31(b64, veo_prompt, form_data.aspect_ratio);
 
-                            const current_urls = current_item?.generate_urls || [];
-                            set_generations_list(prev => prev.map(g =>  g.id === temp_id ? { ...g, generate_urls: [...current_urls, local_video_url], status: TaskStatus.UPLOADING_S3 } : g));
-                            await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
+                                const local_video_url = URL.createObjectURL(video_blob);
 
-                            previous_local_video_url = local_video_url;
-                            last_video_blob = video_blob;
-                        }else{
-                            // get last captured image from previous video
-                            // ===== SCENE LANJUTAN =====
-                            if (!previous_local_video_url) {
-                                throw new Error("Previous video URL not found");
+                                // add generate_urls to generation item with push (append)
+                                // get current generate_urls
+                                const current_item = generations_list.find(g => g.id === temp_id);
+
+                                const current_urls = current_item?.generate_urls || [];
+                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                                    ...g,
+                                    generate_urls: [...current_urls, local_video_url],
+                                    status: TaskStatus.UPLOADING_S3
+                                } : g));
+                                await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
+
+                                previous_local_video_url = local_video_url;
+                                last_video_blob = video_blob;
+                            } else {
+                                // get last captured image from previous video
+                                // ===== SCENE LANJUTAN =====
+                                if (!previous_local_video_url) {
+                                    throw new Error("Previous video URL not found");
+                                }
+
+                                // 🔑 AMBIL LAST FRAME VIDEO SEBELUMNYA
+                                const last_b64_image = await captureLastFrameFromVideoBlob(
+                                    last_video_blob,
+                                    (p) => {
+                                        console.log(`Capturing last frame progress: ${p}%`);
+                                    },
+                                    0.12 // epsilon → detik sebelum akhir
+                                );
+
+                                let mimeType = getMimeTypeFromBase64(last_b64_image);
+
+                                console.log("[StartProduction] Last frame base64 for next scene:", last_b64_image);
+
+                                let blob = base64ToBlob(last_b64_image, mimeType);
+
+                                console.log("[StartProduction] Last frame blob for next scene:", blob);
+
+                                await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
+
+                                // generate video by scene image
+                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
+                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                                    ...g,
+                                    status: TaskStatus.GENERATING_VIDEO,
+                                    progress: 70
+                                } : g));
+
+                                const currentScene = storyboard_chunks[s_idx];
+
+                                let veoPrompt = ``;
+                                veoPrompt += currentScene.description + " ";
+                                veoPrompt += currentScene.scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
+
+                                let scene_index = s_idx + 1;
+                                console.log("[StartProduction] VEO Prompt for next scene video ke :" + scene_index, veoPrompt);
+
+                                const video_blob = await aiService.generateVideoVeo31(last_b64_image, veoPrompt, form_data.aspect_ratio);
+
+                                const local_video_url = URL.createObjectURL(video_blob);
+
+                                // add generate_urls to generation item with push (append)
+                                // get current generate_urls
+                                const current_item = generations_list.find(g => g.id === temp_id);
+
+                                const current_urls = current_item?.generate_urls || [];
+                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                                    ...g,
+                                    generate_urls: [...current_urls, local_video_url],
+                                    status: TaskStatus.UPLOADING_S3
+                                } : g));
+                                await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
+
+                                previous_local_video_url = local_video_url;
                             }
-
-                            // 🔑 AMBIL LAST FRAME VIDEO SEBELUMNYA
-                            const last_b64_image = await captureLastFrameFromVideoBlob(
-                                last_video_blob,
-                                (p) => { console.log(`Capturing last frame progress: ${p}%`); },
-                                0.12 // epsilon → detik sebelum akhir
-                            );
-
-                            let mimeType = getMimeTypeFromBase64(last_b64_image);
-
-                            console.log("[StartProduction] Last frame base64 for next scene:", last_b64_image);
-
-                            let blob = base64ToBlob(last_b64_image, mimeType);
-
-                            console.log("[StartProduction] Last frame blob for next scene:", blob);
-
-                            await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
-
-                            // generate video by scene image
-                            await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
-                            set_generations_list(prev => prev.map(g => g.id === temp_id ? { ...g, status: TaskStatus.GENERATING_VIDEO, progress: 70 } : g));
-
-                            const currentScene = storyboard_chunks[s_idx];
-
-                            let veoPrompt = ``;
-                            veoPrompt += currentScene.description + " ";
-                            veoPrompt += currentScene.scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
-
-                            let scene_index = s_idx + 1;
-                            console.log("[StartProduction] VEO Prompt for next scene video ke :" + scene_index , veoPrompt);
-
-                            const video_blob = await aiService.generateVideoVeo(last_b64_image, veoPrompt, form_data.aspect_ratio);
-
-                            const local_video_url = URL.createObjectURL(video_blob);
-
-                            // add generate_urls to generation item with push (append)
-                            // get current generate_urls
-                            const current_item = generations_list.find(g => g.id === temp_id);
-
-                            const current_urls = current_item?.generate_urls || [];
-                            set_generations_list(prev => prev.map(g =>  g.id === temp_id ? { ...g, generate_urls: [...current_urls, local_video_url], status: TaskStatus.UPLOADING_S3 } : g));
-                            await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
-
-                            previous_local_video_url = local_video_url;
                         }
+                    }else{
+                        // jika model_video bukan veo-3.1 (veo-3.0)
+
+                        await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_FIRST_SCENE_IMAGE);
+                        set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                            ...g,
+                            status: TaskStatus.GENERATING_FIRST_SCENE_IMAGE,
+                            progress: 40
+                        } : g));
+
+                        let previous_local_video_url = null;
+                        let last_video_blob: Blob | null = null;
+                        for (let s_idx = 0; s_idx < storyboard_chunks.length; s_idx++) {
+                            if (s_idx === 0) {
+                                // IMPROVEMENT: Pass target_chars_with_b64 for consistency and multiple character support
+                                const b64 = await aiService.generateFirstSceneImage(
+                                    storyboard_chunks[s_idx],
+                                    product_b64,
+                                    target_chars_with_b64,
+                                    form_data.aspect_ratio
+                                );
+
+                                let mimeType = getMimeTypeFromBase64(b64);
+
+                                let blob = base64ToBlob(b64, mimeType);
+
+                                await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
+
+                                // generate video by scene image
+                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
+                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                                    ...g,
+                                    status: TaskStatus.GENERATING_VIDEO,
+                                    progress: 70
+                                } : g));
+
+                                let veo_prompt = ``;
+                                // concat description + map concat scenes.veo_visual_prompt with identity per scene number , exaple scene {scene_number}: {veo_visual_prompt}
+                                veo_prompt += storyboard_chunks[s_idx].description + " ";
+                                veo_prompt += storyboard_chunks[s_idx].scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
+
+                                console.log("[StartProduction] VEO Prompt for first scene video:", veo_prompt);
+                                const video_blob = await aiService.generateVideoVeo30(veo_prompt, form_data.aspect_ratio, characters_list);
+
+                                const local_video_url = URL.createObjectURL(video_blob);
+
+                                // add generate_urls to generation item with push (append)
+                                // get current generate_urls
+                                const current_item = generations_list.find(g => g.id === temp_id);
+
+                                const current_urls = current_item?.generate_urls || [];
+                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                                    ...g,
+                                    generate_urls: [...current_urls, local_video_url],
+                                    status: TaskStatus.UPLOADING_S3
+                                } : g));
+                                await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
+
+                                previous_local_video_url = local_video_url;
+                                last_video_blob = video_blob;
+                            } else {
+                                // get last captured image from previous video
+                                // ===== SCENE LANJUTAN =====
+                                if (!previous_local_video_url) {
+                                    throw new Error("Previous video URL not found");
+                                }
+
+                                // 🔑 AMBIL LAST FRAME VIDEO SEBELUMNYA
+                                const last_b64_image = await captureLastFrameFromVideoBlob(
+                                    last_video_blob,
+                                    (p) => {
+                                        console.log(`Capturing last frame progress: ${p}%`);
+                                    },
+                                    0.12 // epsilon → detik sebelum akhir
+                                );
+
+                                let mimeType = getMimeTypeFromBase64(last_b64_image);
+
+                                console.log("[StartProduction] Last frame base64 for next scene:", last_b64_image);
+
+                                let blob = base64ToBlob(last_b64_image, mimeType);
+
+                                console.log("[StartProduction] Last frame blob for next scene:", blob);
+
+                                await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
+
+                                // generate video by scene image
+                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
+                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                                    ...g,
+                                    status: TaskStatus.GENERATING_VIDEO,
+                                    progress: 70
+                                } : g));
+
+                                const currentScene = storyboard_chunks[s_idx];
+
+                                let veoPrompt = ``;
+                                veoPrompt += currentScene.description + " ";
+                                veoPrompt += currentScene.scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
+
+                                let scene_index = s_idx + 1;
+                                console.log("[StartProduction] VEO Prompt for next scene video ke :" + scene_index, veoPrompt);
+
+                                const video_blob = await aiService.generateVideoVeo30(veoPrompt, form_data.aspect_ratio, characters_list);
+
+                                const local_video_url = URL.createObjectURL(video_blob);
+
+                                // add generate_urls to generation item with push (append)
+                                // get current generate_urls
+                                const current_item = generations_list.find(g => g.id === temp_id);
+
+                                const current_urls = current_item?.generate_urls || [];
+                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                                    ...g,
+                                    generate_urls: [...current_urls, local_video_url],
+                                    status: TaskStatus.UPLOADING_S3
+                                } : g));
+                                await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
+
+                                previous_local_video_url = local_video_url;
+                            }
+                        }
+
                     }
 
                     await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.UPLOADING_S3);
@@ -310,6 +469,22 @@ const GenerateContent: React.FC = () => {
         }
     };
 
+    const storyBoardChunk = async (target_product, target_chars) => {
+        const storyboard_chunks = [];
+        let current_duration = 0;
+        while (current_duration < form_data.min_duration) {
+            const chunk = await aiService.generateStoryboardChunk(
+                { product: target_product, characters: target_chars, user_prompt: form_data.prompt, negative_prompt: form_data.negative_prompt },
+                storyboard_chunks.flatMap(c => c.scenes)
+            );
+            storyboard_chunks.push(chunk);
+            // current_duration += chunk.scenes.reduce((acc, s) => acc + (s.duration || 5), 0);
+            current_duration += AVG_DURATION_PER_VIDEO;
+        }
+
+        return storyboard_chunks;
+    }
+
     const runItemPipeline = async (ugc_id: string, ugc_item_id: string, order_index: number, context: {
         target_product: Product;
         target_chars: Character[];
@@ -354,7 +529,7 @@ const GenerateContent: React.FC = () => {
                         <header className="flex items-center space-x-4 mb-10">
                             <div className="w-12 h-12 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg"><i className="fas fa-video text-white text-xl"></i></div>
                             <div>
-                                <h2 className="text-3xl font-black text-white italic uppercase tracking-tighter">Generation <span className="text-blue-500">Params</span></h2>
+                                <h2 className="text-3xl font-black text-white italic uppercase tracking-tighter">Affiliate Video <span className="text-blue-500">Generation</span></h2>
                                 <p className="text-[10px] text-slate-500 font-black uppercase tracking-widest leading-none mt-1">UGC Pipeline v1.2</p>
                             </div>
                         </header>
@@ -362,8 +537,46 @@ const GenerateContent: React.FC = () => {
                         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
                             <div className="space-y-8">
                                 <div className="space-y-3">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Judul Campaign</label>
-                                    <input type="text" value={form_data.name} onChange={e => set_form_data({...form_data, name: e.target.value})} className="w-full bg-slate-950 border border-white/10 rounded-2xl px-6 py-4 text-white focus:ring-1 ring-blue-500 outline-none transition-all placeholder:text-slate-700" placeholder="Input Nama..." />
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Judul</label>
+                                    <input type="text" value={form_data.name} onChange={e => set_form_data({...form_data, name: e.target.value})} className="w-full bg-slate-900/50 border border-blue-500/20 rounded-xl px-4 py-3 text-sm text-white focus:border-blue-500 focus:ring-1 ring-blue-500/50 outline-none font-semibold transition-all placeholder:text-slate-600" placeholder="Input Nama..." />
+                                </div>
+
+                                {/*create select option for model_video from MODEL_VIDEOS constant*/}
+                                <div className="space-y-3">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Model Video</label>
+                                    <select value={form_data.model_video} onChange={e => set_form_data({...form_data, model_video: e.target.value})} className="w-full bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-xs text-white outline-none focus:ring-1 ring-blue-500 transition-all">
+                                        {Object.entries(MODEL_VIDEOS).map(([label, key]) => (
+                                            <option key={label} value={key}>{(label === "veo-3.0" ? "Model 3.0 (Tanpa Suara)" : "Model 3.1 (Wajib Pilih Api Key & Set Billing Api Key)")}</option>
+                                        ))}
+                                    </select>
+                                    {/*tambahkan note dengan warna information untuk saat ini pakai if select ada note model 3.0 masih gratis karena beta (sewaktu waktu bisa berubah tergantung kebijakan google), ketika select 3.0 ada note model 3.1 menggunakan biaya dari api key gemini yang dipilih dan wajib setting billing di gcp console */}
+                                    <div className="text-[10px] text-slate-500 italic text-orange-400">
+                                        {form_data.model_video === MODEL_VIDEOS["veo-3.0"] ? (
+                                            <>Note: Model 3.0 masih gratis karena dalam tahap beta. (Kebijakan dapat berubah sewaktu-waktu)</>
+                                        ) : (
+                                            <>Note: Model 3.1 menggunakan biaya dari API Key Gemini yang dipilih. Pastikan Anda telah mengatur billing di GCP Console.</>
+                                        )}
+                                    </div>
+
+                                </div>
+
+                                {/*if model_video is "veo-3.1", show select2 (using Select2 Component ) for get api keys mabarService.getApiKeys()*/}
+                                {/*if model_video is veo-3.0 hide select2 for api keys*/}
+                                <div className={form_data.model_video === MODEL_VIDEOS["veo-3.1"] ? "block" : "hidden"}>
+                                    <Select2Async
+                                        label="Pilih API Key Gemini"
+                                        endpoint={`${API_BASE_URL}/api_keys`}
+                                        placeholder="Cari Key..."
+                                        mapResponse={(data) => {
+                                            // Tambahkan optional chaining agar tidak error jika data kosong
+                                            const key_managements = data?.key_managements || [];
+                                            return key_managements.map((k: any) => ({
+                                                value: k.id.toString(),
+                                                label: k.key_name
+                                            }));
+                                        }}
+                                        onChange={(val) => set_form_data({...form_data, gemini_api_key_id: val ? parseInt((val as any).value) : null})}
+                                    />
                                 </div>
 
                                 <div className="space-y-4">
@@ -451,7 +664,7 @@ const GenerateContent: React.FC = () => {
                                     </div>
                                 </div>
 
-                                <button onClick={startProduction} disabled={is_generating} className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-black py-6 rounded-[2rem] uppercase tracking-widest text-xs transition-all shadow-2xl shadow-blue-600/20 active:scale-95 flex items-center justify-center space-x-3 mt-4">
+                                <button onClick={startProduction} disabled={is_generating} className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-black py-3 rounded-[2rem] uppercase tracking-widest text-xs transition-all shadow-2xl shadow-blue-600/20 active:scale-95 flex items-center justify-center space-x-3 mt-4">
                                     {is_generating ? <><i className="fas fa-circle-notch fa-spin text-lg"></i><span>Processing Generation...</span></> : <><i className="fas fa-rocket text-lg"></i><span>Initialize Content Generation</span></>}
                                 </button>
                             </div>

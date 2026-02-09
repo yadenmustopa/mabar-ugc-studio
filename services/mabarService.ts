@@ -52,6 +52,11 @@ export const mabarApi = {
         return response.data.characters;
     },
 
+    // getApiKeys: async (): Promise<Character[]> => {
+    //     const response = await axios.get(`${API_BASE_URL}/characters`, { headers: getHeaders() });
+    //     return response.data.characters;
+    // },
+
     getObjectStorages: async (): Promise<ObjectStorage[]> => {
         const response = await axios.get(`${API_BASE_URL}/object_storages`, { headers: getHeaders() });
         return response.data.object_storages;
