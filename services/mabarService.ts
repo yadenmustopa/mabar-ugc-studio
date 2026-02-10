@@ -71,6 +71,10 @@ export const mabarApi = {
         return axios.post(`${API_BASE_URL}/ugc/${ugcId}/item/${itemId}/story_board`, { storyboard }, { headers: getHeaders() });
     },
 
+    setAnalyzeScene: async (ugcId: string | number, itemId: string | number, analyze_scene_json: string) => {
+        return axios.post(`${API_BASE_URL}/ugc/${ugcId}/item/${itemId}/set_analyze_scene`, { analyze_scene_json }, { headers: getHeaders() });
+    },
+
     setFirstSceneImage: async (ugcId: string | number, itemId: string | number, imageBlob: Blob, imageIndex: number) => {
         const formData = new FormData();
         formData.append('image_index', imageIndex.toString());
@@ -86,6 +90,16 @@ export const mabarApi = {
         formData.append('video_index', videoIndex.toString());
 
         return axios.post(`${API_BASE_URL}/ugc/${ugcId}/item/${itemId}/save_video_file`, formData, {
+            headers: { ...getHeaders(), 'Content-Type': 'multipart/form-data' }
+        });
+    },
+
+    setVoiceOverFileItem: async (ugcId: string | number, itemId: string | number, voiceOverBlob: Blob, voiceOverIndex: number) => {
+        const formData = new FormData();
+        formData.append('file', voiceOverBlob, `item_${itemId}.wav`);
+        formData.append('voice_over_index', voiceOverIndex.toString());
+
+        return axios.post(`${API_BASE_URL}/ugc/${ugcId}/item/${itemId}/save_voice_over_file`, formData, {
             headers: { ...getHeaders(), 'Content-Type': 'multipart/form-data' }
         });
     },

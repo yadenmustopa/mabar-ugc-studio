@@ -99,3 +99,36 @@ export const getMimeTypeFromBase64 = (base64String: string): string => {
   const match = base64String.match(/^data:([^;]+);base64,/);
   return match ? match[1] : 'image/jpeg'; // Default ke jpeg jika tidak ditemukan
 };
+
+
+export function pcmToWav(
+    pcmData: Uint8Array<any>,
+    sampleRate = 24000
+): Blob {
+  const buffer = new ArrayBuffer(44 + pcmData.length);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, s: string) => {
+    for (let i = 0; i < s.length; i++) {
+      view.setUint8(offset + i, s.charCodeAt(i));
+    }
+  };
+
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + pcmData.length, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, pcmData.length, true);
+
+  new Uint8Array(buffer, 44).set(pcmData);
+
+  return new Blob([buffer], { type: "audio/wav" });
+}

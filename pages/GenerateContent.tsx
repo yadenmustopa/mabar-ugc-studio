@@ -2,7 +2,7 @@ import React, {useEffect, useState, useRef} from 'react';
 import {mabarApi} from '../services/mabarService';
 import {aiService} from '../services/geminiService';
 import {Character, GenerationItem, ObjectStorage, Product, TaskStatus} from '../types';
-import {base64ToBlob, getMimeTypeFromBase64, showToast, urlToBase64} from '../utils';
+import {base64ToBlob, getMimeTypeFromBase64, pcmToWav, showToast, urlToBase64} from '../utils';
 import {
     API_BASE_URL,
     ASPECT_RATIOS,
@@ -22,6 +22,7 @@ const GenerateContent: React.FC = () => {
     const [available_buckets, set_available_buckets] = useState<string[]>([]);
     const [generations_list, set_generations_list] = useState<GenerationItem[]>([]);
     const [is_generating, setIs_generating] = useState(false);
+    const [api_key, set_api_key] = useState<string>('');
 
     const [form_data, set_form_data] = useState({
         name: '',
@@ -103,11 +104,11 @@ const GenerateContent: React.FC = () => {
             showToast("Pilih Storage Server dan Bucket untuk output", "warning");
             return;
         }
-        if(!form_data.model_video === MODEL_VIDEOS["veo-3.1"]){
-            if(!form_data.gemini_api_key_id){
-                showToast("Pilih API Key Gemini untuk model VEO 3.1", "warning");
-            }
-        }
+        // if(!form_data.model_video === MODEL_VIDEOS["veo-3.1"]){
+        //     if(!form_data.gemini_api_key_id){
+        //         showToast("Pilih API Key Gemini untuk model VEO 3.1", "warning");
+        //     }
+        // }
 
         setIs_generating(true);
         let global_ugc_id: string | number | null = null;
@@ -176,252 +177,199 @@ const GenerateContent: React.FC = () => {
                     let storyboard_chunks: any[] = await storyBoardChunk(target_product, target_chars);
                     await mabarApi.setStoryboard(global_ugc_id!, ugc_item_id, storyboard_chunks);
 
-                    // if model_video is veo-3.1 required generate first scene image with aiService.generateFirstSceneImageVeo31
 
-                    if(form_data.model_video === MODEL_VIDEOS["veo-3.1"]) {
+                    await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_FIRST_SCENE_IMAGE);
+                    set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                        ...g,
+                        status: TaskStatus.GENERATING_FIRST_SCENE_IMAGE,
+                        progress: 40
+                    } : g));
 
-                        await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_FIRST_SCENE_IMAGE);
-                        set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                            ...g,
-                            status: TaskStatus.GENERATING_FIRST_SCENE_IMAGE,
-                            progress: 40
-                        } : g));
+                    let previous_local_video_url = null;
+                    let last_video_blob: Blob | null = null;
+                    for (let s_idx = 0; s_idx < storyboard_chunks.length; s_idx++) {
+                        let video_blob = null;
+                        let voiceover_audio_blob = null;
+                        let json_describe = null;
 
-                        let previous_local_video_url = null;
-                        let last_video_blob: Blob | null = null;
-                        for (let s_idx = 0; s_idx < storyboard_chunks.length; s_idx++) {
-                            if (s_idx === 0) {
-                                // IMPROVEMENT: Pass target_chars_with_b64 for consistency and multiple character support
-                                const b64 = await aiService.generateFirstSceneImage(
-                                    storyboard_chunks[s_idx],
-                                    product_b64,
-                                    target_chars_with_b64,
-                                    form_data.aspect_ratio
-                                );
+                        if (s_idx === 0) {
+                            // generate locked first product image
+                            const product_b64_locked = await aiService.generateLockedProductImage(product_b64, form_data.aspect_ratio);
 
-                                let mimeType = getMimeTypeFromBase64(b64);
+                            // IMPROVEMENT: Pass target_chars_with_b64 for consistency and multiple character support
+                            const b64 = await aiService.generateFirstSceneImage(
+                                storyboard_chunks[s_idx],
+                                product_b64_locked,
+                                target_chars_with_b64,
+                                form_data.aspect_ratio
+                            );
 
-                                let blob = base64ToBlob(b64, mimeType);
+                            let mimeType = getMimeTypeFromBase64(b64);
 
-                                await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
+                            let blob = base64ToBlob(b64, mimeType);
 
-                                // generate video by scene image
-                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
-                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                                    ...g,
-                                    status: TaskStatus.GENERATING_VIDEO,
-                                    progress: 70
-                                } : g));
+                            await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
 
-                                let veo_prompt = ``;
-                                // concat description + map concat scenes.veo_visual_prompt with identity per scene number , exaple scene {scene_number}: {veo_visual_prompt}
-                                veo_prompt += storyboard_chunks[s_idx].description + " ";
-                                veo_prompt += storyboard_chunks[s_idx].scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
+                            // generate video by scene image
+                            await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
+                            set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                                ...g,
+                                status: TaskStatus.GENERATING_VIDEO,
+                                progress: 70
+                            } : g));
 
-                                console.log("[StartProduction] VEO Prompt for first scene video:", veo_prompt);
-                                const video_blob = await aiService.generateVideoVeo31(b64, veo_prompt, form_data.aspect_ratio);
+                            let veo_prompt = ``;
+                            // concat description + map concat scenes.veo_visual_prompt with identity per scene number , exaple scene {scene_number}: {veo_visual_prompt}
+                            veo_prompt += storyboard_chunks[s_idx].description + " ";
+                            veo_prompt += storyboard_chunks[s_idx].scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
 
-                                const local_video_url = URL.createObjectURL(video_blob);
+                            if (form_data.model_video === MODEL_VIDEOS["veo-3.0-preview"]) {
 
-                                // add generate_urls to generation item with push (append)
-                                // get current generate_urls
-                                const current_item = generations_list.find(g => g.id === temp_id);
+                                video_blob =
+                                    await aiService.generateVideoVeo30FastPreviewImageToVideo(
+                                        b64,                 // FIRST SCENE IMAGE
+                                        veo_prompt,          // storyboard + scene prompt
+                                        form_data.aspect_ratio
+                                    );
 
-                                const current_urls = current_item?.generate_urls || [];
-                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                                    ...g,
-                                    generate_urls: [...current_urls, local_video_url],
-                                    status: TaskStatus.UPLOADING_S3
-                                } : g));
-                                await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
+                            }else if(form_data.model_video === MODEL_VIDEOS["veo-3.1"]){
+                                video_blob = await aiService.generateVideoVeo31(b64, veo_prompt, form_data.aspect_ratio, target_chars, form_data.resolution);
+                            }else{
+                                // if model_video is veo-3.0
+                                // analyze image first scene to describe prompt image
 
-                                previous_local_video_url = local_video_url;
-                                last_video_blob = video_blob;
-                            } else {
-                                // get last captured image from previous video
-                                // ===== SCENE LANJUTAN =====
-                                if (!previous_local_video_url) {
-                                    throw new Error("Previous video URL not found");
-                                }
+                                // set step analyze scene
+                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.ANALYZING_SCENE);
 
-                                // 🔑 AMBIL LAST FRAME VIDEO SEBELUMNYA
-                                const last_b64_image = await captureLastFrameFromVideoBlob(
-                                    last_video_blob,
-                                    (p) => {
-                                        console.log(`Capturing last frame progress: ${p}%`);
-                                    },
-                                    0.12 // epsilon → detik sebelum akhir
-                                );
+                                json_describe = await aiService.analyzeFirstSceneImage(b64, veo_prompt, target_chars, target_product);
 
-                                let mimeType = getMimeTypeFromBase64(last_b64_image);
 
-                                console.log("[StartProduction] Last frame base64 for next scene:", last_b64_image);
+                                // set analyze scene to mabar api
+                                await mabarApi.setAnalyzeScene(global_ugc_id!, ugc_item_id, JSON.stringify(json_describe));
 
-                                let blob = base64ToBlob(last_b64_image, mimeType);
+                                // const describe_image_prompt = json_describe.description_first_image;
+                                //
+                                // console.log("[StartProduction] VEO Prompt for first scene video:", veo_prompt);
 
-                                console.log("[StartProduction] Last frame blob for next scene:", blob);
+                                const veoAnalysis =
+                                    await aiService.analyzeSceneForVeo(
+                                        b64,
+                                        json_describe.description_first_image
+                                    );
 
-                                await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
-
-                                // generate video by scene image
-                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
-                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                                    ...g,
-                                    status: TaskStatus.GENERATING_VIDEO,
-                                    progress: 70
-                                } : g));
-
-                                const currentScene = storyboard_chunks[s_idx];
-
-                                let veoPrompt = ``;
-                                veoPrompt += currentScene.description + " ";
-                                veoPrompt += currentScene.scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
-
-                                let scene_index = s_idx + 1;
-                                console.log("[StartProduction] VEO Prompt for next scene video ke :" + scene_index, veoPrompt);
-
-                                const video_blob = await aiService.generateVideoVeo31(last_b64_image, veoPrompt, form_data.aspect_ratio);
-
-                                const local_video_url = URL.createObjectURL(video_blob);
-
-                                // add generate_urls to generation item with push (append)
-                                // get current generate_urls
-                                const current_item = generations_list.find(g => g.id === temp_id);
-
-                                const current_urls = current_item?.generate_urls || [];
-                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                                    ...g,
-                                    generate_urls: [...current_urls, local_video_url],
-                                    status: TaskStatus.UPLOADING_S3
-                                } : g));
-                                await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
-
-                                previous_local_video_url = local_video_url;
+                                video_blob = await aiService.generateVideoVeo30WithAudio(veoAnalysis, json_describe, form_data.aspect_ratio);
                             }
-                        }
-                    }else{
-                        // jika model_video bukan veo-3.1 (veo-3.0)
+                        } else {
+                            // get last captured image from previous video
+                            // ===== SCENE LANJUTAN =====
+                            if (!previous_local_video_url) {
+                                throw new Error("Previous video URL not found");
+                            }
 
-                        await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_FIRST_SCENE_IMAGE);
-                        set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                            ...g,
-                            status: TaskStatus.GENERATING_FIRST_SCENE_IMAGE,
-                            progress: 40
-                        } : g));
+                            // 🔑 AMBIL LAST FRAME VIDEO SEBELUMNYA
+                            const last_b64_image = await captureLastFrameFromVideoBlob(
+                                last_video_blob,
+                                (p) => {
+                                    console.log(`Capturing last frame progress: ${p}%`);
+                                },
+                                0.12 // epsilon → detik sebelum akhir
+                            );
 
-                        let previous_local_video_url = null;
-                        let last_video_blob: Blob | null = null;
-                        for (let s_idx = 0; s_idx < storyboard_chunks.length; s_idx++) {
-                            if (s_idx === 0) {
-                                // IMPROVEMENT: Pass target_chars_with_b64 for consistency and multiple character support
-                                const b64 = await aiService.generateFirstSceneImage(
-                                    storyboard_chunks[s_idx],
-                                    product_b64,
-                                    target_chars_with_b64,
-                                    form_data.aspect_ratio
-                                );
+                            let mimeType = getMimeTypeFromBase64(last_b64_image);
 
-                                let mimeType = getMimeTypeFromBase64(b64);
+                            console.log("[StartProduction] Last frame base64 for next scene:", last_b64_image);
 
-                                let blob = base64ToBlob(b64, mimeType);
+                            let blob = base64ToBlob(last_b64_image, mimeType);
 
-                                await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
+                            console.log("[StartProduction] Last frame blob for next scene:", blob);
 
-                                // generate video by scene image
-                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
-                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                                    ...g,
-                                    status: TaskStatus.GENERATING_VIDEO,
-                                    progress: 70
-                                } : g));
+                            await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
 
-                                let veo_prompt = ``;
-                                // concat description + map concat scenes.veo_visual_prompt with identity per scene number , exaple scene {scene_number}: {veo_visual_prompt}
-                                veo_prompt += storyboard_chunks[s_idx].description + " ";
-                                veo_prompt += storyboard_chunks[s_idx].scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
+                            // generate video by scene image
+                            await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
+                            set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                                ...g,
+                                status: TaskStatus.GENERATING_VIDEO,
+                                progress: 70
+                            } : g));
 
-                                console.log("[StartProduction] VEO Prompt for first scene video:", veo_prompt);
-                                const video_blob = await aiService.generateVideoVeo30(veo_prompt, form_data.aspect_ratio, characters_list);
+                            const currentScene = storyboard_chunks[s_idx];
 
-                                const local_video_url = URL.createObjectURL(video_blob);
+                            let veoPrompt = ``;
+                            veoPrompt += currentScene.description + " ";
+                            veoPrompt += currentScene.scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
 
-                                // add generate_urls to generation item with push (append)
-                                // get current generate_urls
-                                const current_item = generations_list.find(g => g.id === temp_id);
+                            let scene_index = s_idx + 1;
+                            console.log("[StartProduction] VEO Prompt for next scene video ke :" + scene_index, veoPrompt);
+                            if (form_data.model_video === MODEL_VIDEOS["veo-3.0-preview"]) {
 
-                                const current_urls = current_item?.generate_urls || [];
-                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                                    ...g,
-                                    generate_urls: [...current_urls, local_video_url],
-                                    status: TaskStatus.UPLOADING_S3
-                                } : g));
-                                await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
+                                video_blob =
+                                    await aiService.generateVideoVeo30FastPreviewImageToVideo(
+                                        last_b64_image,                 // FIRST SCENE IMAGE
+                                        veoPrompt,          // storyboard + scene prompt
+                                        form_data.aspect_ratio
+                                    );
 
-                                previous_local_video_url = local_video_url;
-                                last_video_blob = video_blob;
-                            } else {
-                                // get last captured image from previous video
-                                // ===== SCENE LANJUTAN =====
-                                if (!previous_local_video_url) {
-                                    throw new Error("Previous video URL not found");
-                                }
+                            } else if(form_data.model_video === MODEL_VIDEOS["veo-3.1"]) {
+                                video_blob = await aiService.generateVideoVeo31(last_b64_image, veoPrompt, form_data.aspect_ratio, target_chars, form_data.resolution);
+                            }else{
+                                // set step analyze scene
+                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.ANALYZING_SCENE);
 
-                                // 🔑 AMBIL LAST FRAME VIDEO SEBELUMNYA
-                                const last_b64_image = await captureLastFrameFromVideoBlob(
-                                    last_video_blob,
-                                    (p) => {
-                                        console.log(`Capturing last frame progress: ${p}%`);
-                                    },
-                                    0.12 // epsilon → detik sebelum akhir
-                                );
+                                // if model_video is veo-3.0
+                                // analyze image first scene to describe prompt image
+                                json_describe = await aiService.analyzeFirstSceneImage(last_b64_image, veoPrompt, target_chars, target_product);
 
-                                let mimeType = getMimeTypeFromBase64(last_b64_image);
+                                const veoAnalysis =
+                                    await aiService.analyzeSceneForVeo(
+                                        last_b64_image,
+                                        json_describe.description_first_image
+                                    );
 
-                                console.log("[StartProduction] Last frame base64 for next scene:", last_b64_image);
-
-                                let blob = base64ToBlob(last_b64_image, mimeType);
-
-                                console.log("[StartProduction] Last frame blob for next scene:", blob);
-
-                                await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
-
-                                // generate video by scene image
-                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
-                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                                    ...g,
-                                    status: TaskStatus.GENERATING_VIDEO,
-                                    progress: 70
-                                } : g));
-
-                                const currentScene = storyboard_chunks[s_idx];
-
-                                let veoPrompt = ``;
-                                veoPrompt += currentScene.description + " ";
-                                veoPrompt += currentScene.scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
-
-                                let scene_index = s_idx + 1;
-                                console.log("[StartProduction] VEO Prompt for next scene video ke :" + scene_index, veoPrompt);
-
-                                const video_blob = await aiService.generateVideoVeo30(veoPrompt, form_data.aspect_ratio, characters_list);
-
-                                const local_video_url = URL.createObjectURL(video_blob);
-
-                                // add generate_urls to generation item with push (append)
-                                // get current generate_urls
-                                const current_item = generations_list.find(g => g.id === temp_id);
-
-                                const current_urls = current_item?.generate_urls || [];
-                                set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                                    ...g,
-                                    generate_urls: [...current_urls, local_video_url],
-                                    status: TaskStatus.UPLOADING_S3
-                                } : g));
-                                await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
-
-                                previous_local_video_url = local_video_url;
+                                video_blob = await aiService.generateVideoVeo30WithAudio(veoAnalysis, json_describe, form_data.aspect_ratio);
+                                // generate voiceover
                             }
                         }
 
+                        await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
+
+                        // if(form_data.model_video === MODEL_VIDEOS["veo-3.0"]){
+                        //     const pcmBlob = await aiService.generateTTSFromAnalysis(json_describe);
+                        //     const pcmArray = new Uint8Array(await pcmBlob.arrayBuffer());
+                        //     const wavBlob = pcmToWav(pcmArray, 24000);
+                        //
+                        //     // 🔑 SIMPAN UNTUK UI
+                        //     voiceover_audio_blob = wavBlob;
+                        //
+                        //     await mabarApi.setVoiceOverFileItem(
+                        //         global_ugc_id!,
+                        //         ugc_item_id,
+                        //         wavBlob,
+                        //         s_idx + 1
+                        //     );
+                        // }
+
+
+                        const local_video_url = URL.createObjectURL(video_blob);
+                        const local_audio_url = voiceover_audio_blob ? URL.createObjectURL(voiceover_audio_blob) : null;
+
+                        // add generate_urls to generation item with push (append)
+                        // get current generate_urls
+                        const current_item = generations_list.find(g => g.id === temp_id);
+
+                        const current_urls = current_item?.generate_urls || [];
+                        // current_audios must be array of objects with key current_index
+                        const current_audios = current_item?.local_audio_urls || [];
+                        const current_local_audio_obj = local_audio_url ? { scene_index: s_idx + 1, url: local_audio_url } : null;
+                        set_generations_list(prev => prev.map(g => g.id === temp_id ? {
+                            ...g,
+                            generate_urls: [...current_urls, local_video_url],
+                            local_audio_urls: [...current_audios, ...(current_local_audio_obj ? [current_local_audio_obj] : [])],
+                            status: TaskStatus.UPLOADING_S3
+                        } : g));
+
+                        previous_local_video_url = local_video_url;
+                        last_video_blob = video_blob;
                     }
 
                     await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.UPLOADING_S3);
@@ -482,6 +430,10 @@ const GenerateContent: React.FC = () => {
             current_duration += AVG_DURATION_PER_VIDEO;
         }
 
+        if(storyboard_chunks.length === 0){
+            throw new Error("Storyboard gagal dibuat. Pastikan prompt cukup jelas dan lengkap.");
+        }
+
         return storyboard_chunks;
     }
 
@@ -520,6 +472,20 @@ const GenerateContent: React.FC = () => {
         });
     };
 
+    const changeApiKey = (changed_value) => {
+        if(!changed_value) {
+            set_api_key(null)
+            set_form_data({...form_data, gemini_api_key_id: null});
+            return
+        }
+
+        const [api_key_id, api_key_value] = changed_value.split("--");
+
+        set_api_key(api_key_value);
+        set_form_data({...form_data, gemini_api_key_id: api_key_id});
+        showToast("API Key Gemini diperbarui", "success");
+    }
+
     return (
         <div className="p-8 max-w-[1920px] mx-auto space-y-8 animate-in fade-in duration-500">
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 h-full">
@@ -542,11 +508,17 @@ const GenerateContent: React.FC = () => {
                                 </div>
 
                                 {/*create select option for model_video from MODEL_VIDEOS constant*/}
-                                <div className="space-y-3">
+                                <div className="space-y-3 hidden">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Model Video</label>
                                     <select value={form_data.model_video} onChange={e => set_form_data({...form_data, model_video: e.target.value})} className="w-full bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-xs text-white outline-none focus:ring-1 ring-blue-500 transition-all">
                                         {Object.entries(MODEL_VIDEOS).map(([label, key]) => (
-                                            <option key={label} value={key}>{(label === "veo-3.0" ? "Model 3.0 (Tanpa Suara)" : "Model 3.1 (Wajib Pilih Api Key & Set Billing Api Key)")}</option>
+                                            <option key={label} value={key}>
+                                                {/*{(label === "veo-3.0" ? "Model 3.0 (Tanpa Suara)" : "Model 3.1 (Wajib Pilih Api Key & Set Billing Api Key)")}*/}
+                                                {/*using if else to show label*/}
+                                                {label === "veo-3.0" && "Model 3.0 (Text To Video (Free Beta))"}
+                                                {label === "veo-3.0-preview" && "Model 3.0 Preview (Image To Video Free Beta)"}
+                                                {label === "veo-3.1" && "Model 3.1 (Wajib Pilih Api Key & Set Billing Api Key)"}
+                                            </option>
                                         ))}
                                     </select>
                                     {/*tambahkan note dengan warna information untuk saat ini pakai if select ada note model 3.0 masih gratis karena beta (sewaktu waktu bisa berubah tergantung kebijakan google), ketika select 3.0 ada note model 3.1 menggunakan biaya dari api key gemini yang dipilih dan wajib setting billing di gcp console */}
@@ -560,24 +532,24 @@ const GenerateContent: React.FC = () => {
 
                                 </div>
 
-                                {/*if model_video is "veo-3.1", show select2 (using Select2 Component ) for get api keys mabarService.getApiKeys()*/}
-                                {/*if model_video is veo-3.0 hide select2 for api keys*/}
-                                <div className={form_data.model_video === MODEL_VIDEOS["veo-3.1"] ? "block" : "hidden"}>
-                                    <Select2Async
-                                        label="Pilih API Key Gemini"
-                                        endpoint={`${API_BASE_URL}/api_keys`}
-                                        placeholder="Cari Key..."
-                                        mapResponse={(data) => {
-                                            // Tambahkan optional chaining agar tidak error jika data kosong
-                                            const key_managements = data?.key_managements || [];
-                                            return key_managements.map((k: any) => ({
-                                                value: k.id.toString(),
-                                                label: k.key_name
-                                            }));
-                                        }}
-                                        onChange={(val) => set_form_data({...form_data, gemini_api_key_id: val ? parseInt((val as any).value) : null})}
-                                    />
-                                </div>
+                                {/*/!*if model_video is "veo-3.1", show select2 (using Select2 Component ) for get api keys mabarService.getApiKeys()*!/*/}
+                                {/*/!*if model_video is veo-3.0 hide select2 for api keys*!/*/}
+                                {/*<div className={form_data.model_video === MODEL_VIDEOS["veo-3.1"] ? "block" : "hidden"}>*/}
+                                {/*    <Select2Async*/}
+                                {/*        label="Pilih API Key Gemini"*/}
+                                {/*        endpoint={`${API_BASE_URL}/api_keys`}*/}
+                                {/*        placeholder="Cari Key..."*/}
+                                {/*        mapResponse={(data) => {*/}
+                                {/*            // Tambahkan optional chaining agar tidak error jika data kosong*/}
+                                {/*            const key_managements = data?.key_managements || [];*/}
+                                {/*            return key_managements.map((k: any) => ({*/}
+                                {/*                value: k.id.toString() + "--" + k.key_value,*/}
+                                {/*                label: k.key_name*/}
+                                {/*            }));*/}
+                                {/*        }}*/}
+                                {/*        onChange={(val) => changeApiKey(val)}*/}
+                                {/*    />*/}
+                                {/*</div>*/}
 
                                 <div className="space-y-4">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 block">Pilih Produk</label>
@@ -704,27 +676,58 @@ const GenerateContent: React.FC = () => {
                                                 </div>
                                             </div>
 
-                                            <div className="aspect-video bg-slate-900 rounded-2xl flex items-center justify-center border border-white/5 relative overflow-hidden group/vid shadow-inner">
-                                                {item.generate_urls && item.generate_urls.length > 0 ?
-                                                    item.generate_urls.map( ((url, index) => (
-                                                        <>
-                                                            <video key={url} src={url} className="w-full h-full object-cover absolute inset-0" controls playsInline crossOrigin="anonymous" autoPlay={item.status === TaskStatus.COMPLETED} muted loop />
-                                                            <div>
-                                                                <a href={url} download={`Mabar_Studio_Video_${item.order_index}_${index}.mp4`} target="_blank" rel="noopener noreferrer" className="flex-1 bg-slate-900 hover:bg-slate-800 border border-white/5 py-2.5 rounded-xl text-[8px] font-black text-slate-300 uppercase tracking-widest flex items-center justify-center space-x-2 transition-all">
-                                                                    <i className="fas fa-download text-[7px]"></i>
-                                                                    <span>Download Result</span>
-                                                                </a>
-                                                            </div>
-                                                        </>
-                                                    ))
+                                            <div className="bg-slate-900 rounded-2xl border border-white/5 relative overflow-hidden group/vid shadow-inner p-4">
+                                                {item.generate_urls && item.generate_urls.length > 0 ? (
+                                                    /* Menggunakan Grid agar jika ada > 1 video, tampilannya tetap rapi */
+                                                    <div className="grid grid-cols-1 gap-6">
+                                                        {item.generate_urls.map((url, index) => {
+                                                            const sceneIndex = index + 1;
+                                                            const audioObj = item.local_audio_urls?.find(
+                                                                a => a.scene_index === sceneIndex
+                                                            );
+
+                                                            return (
+                                                                <div key={url} className="flex flex-col space-y-3">
+                                                                    {/* Video Container dengan Aspect Ratio yang konsisten */}
+                                                                    <div className="aspect-video w-full overflow-hidden rounded-xl bg-black/20">
+                                                                        <video
+                                                                            src={url}
+                                                                            className="w-full h-full object-cover"
+                                                                            controls
+                                                                            playsInline
+                                                                        />
+                                                                    </div>
+
+                                                                    {/* Audio Player di bawah video */}
+                                                                    {audioObj && (
+                                                                        <div className="bg-white/5 p-2 rounded-lg">
+                                                                            <audio
+                                                                                src={audioObj.url}
+                                                                                className="w-full h-8"
+                                                                                controls
+                                                                                playsInline
+                                                                            />
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
                                                 ) : (
-                                                    <div className="flex flex-col items-center space-y-2 opacity-40">
-                                                        {item.status === TaskStatus.FAILED ? <i className="fas fa-exclamation-triangle text-rose-500 text-2xl"></i> : <i className="fas fa-film text-slate-500 text-2xl animate-pulse"></i>}
+                                                    /* State Loading / Empty tetap menjaga aspect ratio agar layout tidak loncat */
+                                                    <div className="aspect-video flex flex-col items-center justify-center space-y-2 opacity-40">
+                                                        {item.status === TaskStatus.FAILED ? (
+                                                            <i className="fas fa-exclamation-triangle text-rose-500 text-2xl"></i>
+                                                        ) : (
+                                                            <i className="fas fa-film text-slate-500 text-2xl animate-pulse"></i>
+                                                        )}
                                                     </div>
                                                 )}
+
+                                                {/* Overlay Loading Status */}
                                                 {(!item.generate_urls || item.generate_urls.length === 0) && item.status !== TaskStatus.FAILED && (
                                                     <div className="absolute inset-0 bg-blue-600/5 flex items-center justify-center backdrop-blur-[1px]">
-                                                        <i className="fas fa-cog fa-spin text-blue-500/50 text-xs"></i>
+                                                        <i className="fas fa-cog fa-spin text-blue-500/50 text-xl"></i>
                                                     </div>
                                                 )}
                                             </div>

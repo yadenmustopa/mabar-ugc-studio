@@ -7,6 +7,8 @@ export enum TaskStatus {
   GENERATING_VIDEO = 'Generating Video',
   UPLOADING_S3 = 'Uploading to Vultr S3',
   COMPLETING = 'Completing',
+  ANALYZING_SCENE = 'Analyzing Scene',
+  GENERATING_VOICEOVER = 'Generating Voiceover',
   COMPLETED = 'Completed',
   FAILED = 'Failed'
 }
@@ -64,6 +66,7 @@ export interface GenerationItem {
   generate_urls?: Array<string>;
   failed_reason?: string;
   storyboard_data?: any;
+  local_audio_urls?: Array<{ scene_index: number; url: string }>;
 }
 
 export interface UGC {

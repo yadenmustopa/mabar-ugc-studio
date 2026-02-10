@@ -21,12 +21,24 @@ export const MODELS = {
   IMAGE: 'gemini-2.5-flash-image',
   // VIDEO: 'veo-3.1-fast-generate-preview',
   VIDEO:  'veo-3.0-fast-generate-001',
+  VISION: 'gemini-2.0-flash'
 };
 
 export const MODEL_VIDEOS = {
   'veo-3.0' : 'veo-3.0-fast-generate-001',
-  'veo-3.1' : 'veo-3.1-fast-generate-preview',
+  'veo-3.0-preview' : 'veo-3.0-fast-generate-preview',
+  // 'veo-3.1' : 'veo-3.1-fast-generate-preview',
+  'veo-3.1' : 'veo-3.1-generate-preview'
 }
+
+export const ALLOWED_GEMINI_VOICES = new Set([
+  "achernar","aoede","autonoe","callirrhoe","despina","erinome",
+  "gacrux","kore","laomedeia","leda","pulcherrima","sulafat",
+  "vindemiatrix","zephyr",
+  "achird","algenib","algieba","alnilam","charon","enceladus",
+  "fenrir","iapetus","orus","puck","rasalgethi","sadachbia",
+  "sadaltager","schedar","umbriel","zubenelgenubi"
+]);
 
 export const RESOLUTIONS = [
   { value: '720p', label: '720p (HD)' },
