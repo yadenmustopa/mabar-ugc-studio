@@ -5,11 +5,12 @@ interface BaseSelectAsyncProps {
     label: string;
     endpoint: string;
     placeholder?: string;
+    // Ubah any menjadi tipe yang lebih spesifik jika memungkinkan
     onChange?: (value: any) => void;
-    mapResponse: (data: any) => { value: any; label: string }[];
+    mapResponse: (data: any) => { value: any; label: string; item: any }[]; // Tambahkan item di sini
 }
 
-const Select2Async = ({ label, endpoint, placeholder, onChange, mapResponse }: BaseSelectAsyncProps) => {
+const Select2Async = ({ label, endpoint, placeholder, onChange, mapResponse}: BaseSelectAsyncProps) => {
 
     // Fungsi utama untuk mengambil data
     const loadOptions = async (inputValue: string) => {
@@ -38,7 +39,6 @@ const Select2Async = ({ label, endpoint, placeholder, onChange, mapResponse }: B
             </label>
 
             <AsyncSelect
-                cacheOptions
                 // defaultOptions={true} akan memanggil loadOptions("") otomatis saat komponen dimuat
                 defaultOptions={true}
                 loadOptions={loadOptions}
@@ -46,6 +46,7 @@ const Select2Async = ({ label, endpoint, placeholder, onChange, mapResponse }: B
                 placeholder={placeholder || "Cari..."}
                 isSearchable={true}
                 openMenuOnFocus={true}
+                isClearable={true}
                 classNames={{
                     // Meniru: w-full bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-xs text-white
                     control: (state) =>

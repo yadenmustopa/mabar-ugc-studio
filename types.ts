@@ -41,10 +41,13 @@ export interface Character {
   character_image_path?: string | null;
 }
 
+// Fix: Add label and key_prefix to satisfy API response mapping and dummy data usage
 export interface ApiKey {
   id: number;
-  key_name: string;
-  key_value: string;
+  key_name?: string;
+  key_value?: string;
+  label?: string;
+  key_prefix?: string;
   is_active: boolean|number;
 }
 

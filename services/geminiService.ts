@@ -5,7 +5,9 @@ import { StoryboardJSON, StoryboardScene, Character } from "../types";
 import {getMimeTypeFromBase64} from "@/utils";
 
 const getEffectiveApiKey = (): string => {
-  return process.env.API_KEY || '';
+  const env_api_key = process.env.API_KEY || '';
+  console.log("env_api_key :", env_api_key);
+  return env_api_key;
 };
 
 const translateGeminiError = (error: any, step_request=""): string => {
@@ -25,15 +27,16 @@ export const aiService = {
   /**
    * Menghasilkan potongan storyboard JSON menggunakan Structured Output.
    */
-  generateStoryboardChunk: async (data: any, existing_scenes: StoryboardScene[] = [], retryCount = 0): Promise<StoryboardJSON> => {
+  async generateStoryboardChunk(data: any, existing_scenes: StoryboardScene[] = [], retryCount = 0): Promise<StoryboardJSON> {
     let apiKey = getEffectiveApiKey();
     console.log("[GeminiService] Using API Key Prefix:", apiKey ? apiKey.slice(0, 8) + "..." : "No Key");
     const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
     const MAX_RETRIES = 4;
 
-    // Di dalam generateStoryboardChunk
-    const lastScenes = existing_scenes.slice(-2); // Cukup 2 adegan terakhir
+    const lastScenes = existing_scenes.slice(-2);
     const totalScenes = existing_scenes.length;
+
+    console.log({characters_in_storyboard_chunk: data.characters})
 
     const context_scenes = lastScenes.length > 0
         ? `
@@ -160,7 +163,7 @@ TUGAS: Lanjutkan ke Adegan ${totalScenes + 1}. Pastikan transisi smooth dari "Po
       try {
         const parsed = JSON.parse(jsonStr);
         if(!parsed.scenes || !Array.isArray(parsed.scenes) || parsed.scenes.length === 0) {
-            throw new Error("Struktur JSON valid tapi adegan kosong. Mungkin model gagal menghasilkan konten yang sesuai. Coba lagi.");
+          throw new Error("Struktur JSON valid tapi adegan kosong. Mungkin model gagal menghasilkan konten yang sesuai. Coba lagi.");
         }
 
         return parsed as StoryboardJSON;
@@ -179,12 +182,31 @@ TUGAS: Lanjutkan ke Adegan ${totalScenes + 1}. Pastikan transisi smooth dari "Po
    * PASS 1 — Generate LOCKED product image
    * This image becomes the immutable master asset.
    */
-  generateLockedProductImage: async (
+  async generateLockedProductImage(
       product_b64: string,
-      aspect_ratio: string
-  ): Promise<string> => {
+      aspect_ratio: string,
+      using_api_key: boolean = false,
+      max_retries = 2
+  ): Promise<string> {
+    console.log("[GeminiService] Generating Locked Product Image with base64:", product_b64);
 
-    const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
+    if(!product_b64 || product_b64.length < 100) {
+        throw new Error("Invalid product image data for locked image generation.");
+    }
+
+    let api_key = getEffectiveApiKey();
+
+    if(using_api_key) {
+        api_key = localStorage.getItem('api_key');
+    }
+
+    console.log("Current API Key Prefix for Locked Product Image:", api_key ? api_key.slice(0, 8) + "..." : "No Key");
+
+    let param_key = {
+        apiKey : api_key
+    }
+
+    const ai = new GoogleGenAI(param_key);
 
     const prompt = `
 You are performing PRODUCT IMAGE REPLICATION.
@@ -228,12 +250,14 @@ A high-resolution PNG image.
 The product must be visually indistinguishable from the reference.
 `;
 
+    const mimeType = getMimeTypeFromBase64(product_b64);
+
     try {
       const response = await ai.models.generateContent({
         model: MODELS.IMAGE,
         contents: {
           parts: [
-            { inlineData: { data: product_b64, mimeType: "image/png" } }, // @image1 = PRODUCT MASTER
+            { inlineData: { data: product_b64, mimeType: mimeType } },
             { text: prompt }
           ]
         },
@@ -250,6 +274,11 @@ The product must be visually indistinguishable from the reference.
       return img;
 
     } catch (e: any) {
+      // Retry logic for transient errors
+        if (max_retries > 0) {
+            console.warn(`[GeminiService] Error in generateLockedProductImage, retrying... (${max_retries} retries left)`, e);
+            return await aiService.generateLockedProductImage(product_b64, aspect_ratio, true, max_retries - 1);
+        }
       throw new Error(translateGeminiError(e, "generateLockedProductImage"));
     }
   },
@@ -257,61 +286,92 @@ The product must be visually indistinguishable from the reference.
 
   /**
    * Menghasilkan gambar adegan dengan referensi visual produk & karakter.
-   * IMPROVEMENT: Mengubah wording prompt untuk menghindari filter 'deepfake/privacy'
-   * dengan menekankan pada 'Commercial Scene with Actors' dan menangkap refusal text.
+   * IMPROVEMENT: Treats the product image as an IMMUTABLE layer to preserve fidelity.
    */
-  generateFirstSceneImage: async (
+  async generateFirstSceneImage(
+      api_key : string,
+      prompt_visual: string,
+      additional_prompt: string,
       storyboard_chunk: StoryboardJSON,
-      product_b64: string | null,
+      locked_product_b64: string,
       characters: Array<Character & { b64: string }>,
       aspect_ratio: string
-  ) => {
-    const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
+  ) {
+    console.log({
+        "[GeminiService] Generating First Scene Image with params:": {
+            prompt_visual,
+            additional_prompt,
+            storyboard_chunk,
+            locked_product_b64: locked_product_b64 ? "[REDACTED BASE64]" : "MISSING",
+            characters,
+            aspect_ratio
+        }
+    });
+
+    let current_key = api_key ? api_key : getEffectiveApiKey();
+
+    // set process.env.API_KEY to current_key for downstream usage in GoogleGenAI if needed
+    
+    console.log("Current API Key Prefix:", current_key ? current_key.slice(0, 8) + "..." : "No Key");
+    const param_key = {
+        apiKey : current_key
+    }
+    console.log("generateFirstSceneImage param_key", {param_key})
+
+    const ai = new GoogleGenAI(param_key);
+    const product_mime_type = getMimeTypeFromBase64(locked_product_b64);
+
+    // const char_details = characters.map((c, idx) => {
+    //   const label = `@actor${(idx + 1).toString().padStart(2, '0')}`;
+    //   return `${label}: Represented by a professional actor. Role: ${c.name}, Desc: ${c.description}`;
+    // }).join(" | ");
+
     const first_scene = storyboard_chunk.scenes?.[0];
 
-    const char_details = characters.map((c, idx) => {
-      const label = `@actor${(idx + 1).toString().padStart(2, '0')}`;
-      return `${label}: Represented by a professional actor. Role: ${c.name}, Desc: ${c.description}`;
-    }).join(" | ");
+    // const char_mentions = characters.map((_, idx) => `@actor${(idx + 1).toString().padStart(2, '0')}`).join(", ");
 
-    const char_mentions = characters.map((_, idx) => `@actor${(idx + 1).toString().padStart(2, '0')}`).join(", ");
+    console.log("generateFirstSceneImage characters", {characters})
+    const char_labels = characters.map((_, idx) => `@image${idx + 2}`); // Start from 2 because @image1 is product
+    const all_actors_list = char_labels.join(" and ");
 
     const prompt_text = `
-    A high-end cinematic commercial photography for a lifestyle campaign., You are composing a COMMERCIAL SCENE.
+    [PIXEL-PERFECT PRODUCT INTEGRATION]:
+    - The product must be the visual anchor of the scene, fully visible and undistorted.
+    - @image1 (Product) is the STATIC ANCHOR of this scene.
+    - Characters (${all_actors_list}) should interact with the product naturally, without obscuring it.
+   
+    [SCENE CONTEXT]:
     
-    TECHNICAL DIRECTIVES:
-    1. Use provided images as visual references for the product and the actors.
-    2. The product MUST be the central focal point, clearly visible and sharp and not modify image product.
-    3. The actors representing ${char_mentions} must interact naturally in a professional commercial setting.
-    4. Photography Style: 85mm f/1.4 lens, 8K resolution, cinematic color grading, sharp focus on subject.
-    5. You can change the clothes worn by the character with appropriate clothes.
+    ${prompt_visual}
     
-    SAFETY GUIDELINES:
-    - Depict fictional characters in a fictional commercial scene.
-    - NO real-world celebrities. NO children.
-    - Focus on aesthetic high-quality lifestyle photography.
     
-    SCENE CONTENT: ${first_scene?.actions.join(", ")}. 
-    SETTING: ${first_scene?.setting}. 
-    LIGHTING: ${first_scene?.lighting}.
+    [EXECUTION & STYLE]:
     
-    ====================
-    CAMERA
-    ====================
-    - Stable framing
-    - Product centered or foreground
-    - Cinematic depth, but product remains sharp
+    - Setting: ${first_scene?.setting}.
+    
+    - Action: ${first_scene?.actions.join(", ")}.
+    
+    - Camera: Medium-Wide shot to ensure everyone and the product are fully framed.
+    
+    - Lighting: Studio commercial lighting that preserves the original colors of @image1.
+    
+    - Style: Professional 8k photography, no artistic filters that distort product color.
+   
+    [FINAL TASK]:
+    Combine the @image1 as product and ${characters.map((c, i) => `- @image${i + 2}`).join("\n")}`;
 
-    CHARACTER DETAILS:
-    ${char_details}
-    
-    OUTPUT: A single high-quality PNG image representing the scene as described.
-    `;
+    console.log("[GeminiService] First Scene Prompt:", prompt_text);
 
-    const parts: any[] = [];
-    if (product_b64) parts.push({ inlineData: { data: product_b64, mimeType: 'image/png' } });
+
+    const parts: any[] = [
+      { inlineData: { data: locked_product_b64, mimeType: product_mime_type} } // @image1 is the locked product
+    ];
     characters.forEach((char) => {
-      parts.push({ inlineData: { data: char.b64, mimeType: 'image/png' } });
+      console.log("[GeminiService] Adding character image to prompt parts.", { name: char.name, b64Length: char.b64.length });
+      const char_b64 = char.b64;
+      console.log("[GeminiService] Character base64 sample:", char_b64.substring(0, 30) + "...");
+      const mimeType = getMimeTypeFromBase64(char_b64);
+      parts.push({ inlineData: { data: char.b64, mimeType: mimeType } });
     });
     parts.push({ text: prompt_text });
 
@@ -334,450 +394,56 @@ The product must be visually indistinguishable from the reference.
         }
       }
 
-      // Jika tidak ada data gambar tapi ada teks penolakan dari model
       if (!base64 && refusalText) {
         throw new Error(refusalText);
       }
 
-      if (!base64) throw new Error("Gagal mensintesis gambar (Respons Kosong dari Model).");
+      if (!base64) throw new Error("Gagal mensintesis gambar adegan.");
       return base64;
     } catch (e: any) {
       console.error("[GeminiService] Image Gen Error:", e);
-      throw new Error(translateGeminiError(e));
+      throw new Error(translateGeminiError(e, "generateFirstSceneImage"));
     }
   },
 
-
-
-//   /**
-//    * PASS 2 — Scene composition using LOCKED product image
-//    */
-//   generateFirstSceneImage: async (
-//       storyboard_chunk: StoryboardJSON,
-//       locked_product_b64: string, // ⬅️ hasil PASS-1
-//       characters: Array<Character & { b64: string }>,
-//       aspect_ratio: string
-//   ): Promise<string> => {
-//
-//     const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
-//     const first_scene = storyboard_chunk.scenes?.[0];
-//
-//     const char_details = characters.map((c, idx) => {
-//       const label = `@actor${idx + 1}`;
-//       return `${label}: professional actor, ${c.description}`;
-//     }).join("\n");
-//
-//     const prompt = `
-// You are composing a COMMERCIAL SCENE.
-//
-// ====================
-// PRODUCT — IMMUTABLE
-// ====================
-// - @image1 is a FINAL PRODUCT ASSET.
-// - DO NOT redraw, repaint, relight, or modify it.
-// - The product appearance MUST remain EXACT.
-//
-// ====================
-// SCENE RULES
-// ====================
-// - Characters may exist AROUND the product.
-// - Characters MUST NOT touch or cover the product.
-// - Product stays visually dominant and unchanged.
-//
-// ====================
-// SCENE DETAILS
-// ====================
-// Actions:
-// ${first_scene?.actions.join(", ")}
-//
-// Setting:
-// ${first_scene?.setting}
-//
-// Lighting:
-// Soft commercial lighting. Product lighting neutral and consistent.
-//
-// ====================
-// CHARACTERS
-// ====================
-// ${char_details}
-//
-// ====================
-// CAMERA
-// ====================
-// - Stable framing
-// - Product centered or foreground
-// - Cinematic depth, but product remains sharp
-//
-// ====================
-// OUTPUT
-// ====================
-// One high-quality PNG image.
-// `;
-//
-//     const parts: any[] = [
-//       { inlineData: { data: locked_product_b64, mimeType: "image/png" } } // @image1
-//     ];
-//
-//     characters.forEach(c =>
-//         parts.push({ inlineData: { data: c.b64, mimeType: "image/png" } })
-//     );
-//
-//     parts.push({ text: prompt });
-//
-//     try {
-//       const response = await ai.models.generateContent({
-//         model: MODELS.IMAGE,
-//         contents: { parts },
-//         config: {
-//           imageConfig: { aspectRatio: aspect_ratio as any }
-//         }
-//       });
-//
-//       const resultParts = response.candidates?.[0]?.content?.parts || [];
-//       const img = resultParts.find(p => p.inlineData)?.inlineData?.data;
-//
-//       if (!img) throw new Error("Scene image generation failed.");
-//
-//       return img;
-//
-//     } catch (e: any) {
-//       throw new Error(translateGeminiError(e, "generateFirstSceneImage"));
-//     }
-//   },
-
-
   /**
-   * Analisa gambar scene pertama untuk:
-   * - visual description (untuk Veo 3.0 Fast)
-   * - voice over text (untuk TTS + lipsync)
+   * Analisa gambar scene pertama untuk visual description & TTS parameters.
    */
-  analyzeFirstSceneImageWithoutAudio: async (
+  async analyzeFirstSceneImage(
       first_scene_base64: string,
       prompt_visual: string,
       characters: Character[] = [],
       product_json: any = {}
-  ) => {
+  ) {
     const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
 
-    const prompt = `
-You are a professional commercial director, product analyst,
-and voice casting expert.
+    const product_hint = `PRODUCT HINT: ${product_json.name || "Unknown"} | ${product_json.description || "N/A"}`;
+    let character_hint = `CHARACTER HINTS:`;
+    for (const c of characters) {
+      character_hint += `\n- ${c.name} (${c.gender}): ${c.description}`;
+    }
+
+    const master_prompt = `
+You are a commercial director and visual prompt engineer.
 
 TASK:
-Analyze the provided image and produce:
-1. A highly detailed visual description for cinematic video generation (silent).
-2. Natural Indonesian voice-over text suitable for lip-sync.
-3. Voice casting parameters optimized for Gemini-TTS.
-
-STRICT RULES:
-- Base ALL descriptions strictly on the image.
-- DO NOT hallucinate unseen details.
-- Use HEX color codes for product colors.
-- Describe product shape, dimensions, material, and finish clearly.
-- Describe characters: skin tone, face shape, outfit, posture.
-- Visual description MUST be silent (no mention of audio or speech).
-- Voice-over text MUST be Bahasa Indonesia (id-ID), casual, short, and conversational.
+Analyze the provided image and generate:
+1. description_first_image: A highly detailed VISUAL-ONLY prompt for AI Video (no sound mentions).
+2. voice_over_text: A natural, short, and conversational Indonesian dialogue/narration matching the scene.
 
 VOICE CASTING RULES:
-- Choose ONE Gemini-TTS prebuilt voice persona.
-- Available voices:
+- Choose from these Gemini TTS voices:
+  - Female: Kore, Aoede, Leda, Callirrhoe, Erinome, Pulcherrima, Zephyr
+  - Male: Achird, Algenib, Algieba, Alnilam, Charon, Enceladus, Fenrir, Orus, Puck
+- speaking_rate: 0.9 - 1.0.
+- pause_hint: short, medium, long.
 
-Female:
-Achernar, Aoede, Autonoe, Callirrhoe, Despina, Erinome,
-Gacrux, Kore, Laomedeia, Leda, Pulcherrima, Sulafat,
-Vindemiatrix, Zephyr
-
-Male:
-Achird, Algenib, Algieba, Alnilam, Charon, Enceladus,
-Fenrir, Iapetus, Orus, Puck, Rasalgethi, Sadachbia,
-Sadaltager, Schedar, Umbriel, Zubenelgenubi
-
-- Select a voice that sounds natural and pleasant for Indonesian speech.
-- Prefer friendly commercial narration style.
-
-PROSODY RULES:
-- speaking_rate: between 0.9 and 1.0 (default 0.95)
-- pause_hint:
-  short  → energetic
-  medium → calm
-  long   → emotional
-
-OUTPUT FORMAT:
-JSON only.
-`;
-
-    // product prompt
-    //      {
-    //             "id" : 1,
-    //             "name" : "Name of product",
-    //             "sku" : "SKU of product",
-    //             "description" : "",
-    //             "prompt_description" : "description of prompt format",
-    //             "dimension" : "Real Dimension Of Product, P x L x t",
-    //             "image_url" : "Url from image"
-    //       }
-    const product_prompt = `PRODUCT DETAILS:
-- Name: ${product_json.name || "N/A"}
-- SKU: ${product_json.sku || "N/A"}
-- Description: ${product_json.description || "N/A"}
-- Dimensions In Centimeter: ${product_json.dimension || "N/A"}
-`
-
-    //     {
-    //           "id" : 1,
-    //           "name" : "Name Of Character",
-    //           "gender" : "MALE|FEMALE",
-    //           "description" : "Description of character",
-    //           "prompt" : "Prompt for build character"
-    //       }
-
-    let character_prompt = `Details of Characters in the Scene:`;
-
-    //foreach character
-    for (const character of characters) {
-        character_prompt += `
-- Name: ${character.name} 
-    Description: ${character.description} , With Detail : ${character.prompt}
-`;
-    }
-
-    const final_prompt = [product_prompt, character_prompt, prompt].join("\n");
-
-      let mimeType = getMimeTypeFromBase64(first_scene_base64);
-      if (!mimeType.startsWith('image/')) {
-          throw new Error("Tipe data gambar tidak dikenali atau tidak valid.");
-      }
-
-    try {
-      const response = await ai.models.generateContent({
-        model: MODELS.VISION, // e.g. gemini-2.0-flash
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                data: first_scene_base64,
-                mimeType: "image/png",
-              },
-            },
-            {
-              text: `
-${final_prompt}
-
-IMAGE CONTEXT PROMPT:
-${prompt_visual}
-`,
-            },
-          ],
-        },
-        config: {
-          responseMimeType: "application/json",
-          temperature: 0.4,
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              description_first_image: { type: Type.STRING },
-
-              voice_over_text: { type: Type.STRING },
-
-              language_code: {
-                type: Type.STRING,
-                enum: ["id-ID"],
-              },
-
-              gender_voice: {
-                type: Type.STRING,
-                enum: ["male", "female"],
-              },
-
-              voice_name: {
-                type: Type.STRING,
-                enum: [
-                  // Female
-                  "achernar","aoede","autonoe","callirrhoe","despina",
-                  "erinome","gacrux","kore","laomedeia","leda",
-                  "pulcherrima","sulafat","vindemiatrix","zephyr",
-
-                  // Male
-                  "achird","algenib","algieba","alnilam","charon",
-                  "enceladus","fenrir","iapetus","orus","puck",
-                  "rasalgethi","sadachbia","sadaltager","schedar",
-                  "umbriel","zubenelgenubi"
-                ],
-              },
-
-              speaking_rate: {
-                type: Type.NUMBER,
-                minimum: 0.9,
-                maximum: 1.0,
-              },
-
-              pause_hint: {
-                type: Type.STRING,
-                enum: ["short", "medium", "long"],
-              },
-            },
-            required: [
-              "description_first_image",
-              "voice_over_text",
-              "language_code",
-              "gender_voice",
-              "voice_name",
-              "speaking_rate",
-              "pause_hint",
-            ],
-          }
-
-        },
-      });
-
-      let jsonStr = (response.text || "{}").trim();
-      if (jsonStr.startsWith("```")) {
-        jsonStr = jsonStr
-            .replace(/^```json\n?/, "")
-            .replace(/\n?```$/, "")
-            .trim();
-      }
-
-      // check if valid JSON
-      try{
-        const data = JSON.parse(jsonStr);
-        if(!data.description_first_image || !data.voice_over_text) {
-            throw new Error("JSON valid tapi konten tidak lengkap. Mungkin model gagal menghasilkan konten yang sesuai. Coba lagi.");
-        }
-      }catch (e) {
-        // try request again
-        return aiService.analyzeFirstSceneImage(first_scene_base64, prompt_visual, characters, product_json);
-      }
-
-      return JSON.parse(jsonStr);
-    } catch (e: any) {
-      throw new Error(translateGeminiError(e, "analyzeFirstSceneImage"));
-    }
-  },
-
-
-  /**
-   * Analisa gambar scene pertama untuk:
-   * - visual description (untuk Veo 3.0 Fast)
-   * - voice over text (untuk TTS + lipsync)
-   */
-  /**
-   * Analisa gambar scene pertama untuk:
-   * - visual description (grounded & prompt-ready for text-to-video)
-   * - voice over text (Bahasa Indonesia, casual, short)
-   *
-   * IMPORTANT:
-   * - Image is the ONLY source of truth
-   * - Product & character data are only soft hints
-   * - Zero hallucination tolerance
-   */
-  analyzeFirstSceneImage: async (
-      first_scene_base64: string,
-      prompt_visual: string,
-      characters: Character[] = [],
-      product_json: any = {}
-  ) => {
-    const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
-
-    const mimeType = getMimeTypeFromBase64(first_scene_base64);
-    if (!mimeType.startsWith("image/")) {
-      throw new Error("Tipe data gambar tidak valid.");
-    }
-
-    /* ------------------------------
-     * PRODUCT & CHARACTER CONTEXT
-     * (HINT ONLY — NOT FACT SOURCE)
-     * ------------------------------ */
-    const product_hint = `
-PRODUCT HINT (for validation only, not imagination):
-- Name: ${product_json.name || "Unknown"}
-- SKU: ${product_json.sku || "Unknown"}
-- Claimed Dimension (cm): ${product_json.dimension || "Unknown"}
-`;
-
-    let character_hint = `CHARACTER HINTS (do NOT invent if not visible):`;
-    for (const c of characters) {
-      character_hint += `
-- Name: ${c.name}
-  Gender: ${c.gender}
-  Description Hint: ${c.description}
-  Prompt Hint: ${c.prompt}
-`;
-    }
-
-    /* ------------------------------
-     * CORE MASTER PROMPT
-     * ------------------------------ */
-    const master_prompt = `
-You are a senior commercial director, visual analyst, and prompt engineer.
-
-====================
-ABSOLUTE RULES
-====================
-1. The IMAGE is the ONLY source of truth.
-2. Describe ONLY what is clearly visible.
-3. DO NOT guess, infer, or beautify unseen details.
-4. If a detail is unclear, state it as "not clearly visible".
-5. No storytelling, no emotion, no audio reference in visual description.
-6. Colors MUST use HEX codes if visible.
-7. Dimensions MUST be comparative (e.g., "fits in one hand", "bottle-sized").
-8. Characters are actors in a commercial scene, not real people.
-
-====================
-PHASE 1 — VISUAL GROUNDING (SILENT)
-====================
-Analyze the image and internally identify:
-- Product: shape, material, finish, color, relative size, orientation
-- Characters: skin tone, face shape, outfit, posture, relative scale
-- Scene: setting, lighting, camera angle, composition
-- Spatial relations: distance, foreground/background, interaction
-
-====================
-PHASE 2 — OUTPUT SYNTHESIS
-====================
-Using ONLY the grounded visual facts, generate:
-
-1. description_first_image
-   - Single detailed paragraph
-   - Written as a READY-TO-USE visual prompt for text-to-video
-   - No audio, no voice, no narration words
-
-2. voice_over_text
-   - Bahasa Indonesia (id-ID)
-   - Casual, friendly, commercial tone
-   - Short (1–2 sentences)
-   - Conversational, natural
-
-====================
-VOICE CASTING RULES
-====================
-- Choose ONE Gemini TTS prebuilt voice
-- Sound natural for Indonesian language
-- Friendly commercial narration
-
-====================
-PROSODY RULES
-====================
-- speaking_rate: 0.9 – 1.0 (ideal 0.95)
-- pause_hint:
-  short  → energetic
-  medium → calm
-  long   → emotional
-
-====================
-VALIDATION CONTEXT
-====================
+IMAGE CONTEXT:
 ${product_hint}
-
 ${character_hint}
+Scene Intent: ${prompt_visual}
 
-SCENE INTENT (NOT VISUAL FACT):
-${prompt_visual}
-
-====================
-OUTPUT
-====================
-Return JSON ONLY.
+OUTPUT: JSON only.
 `;
 
     try {
@@ -787,8 +453,8 @@ Return JSON ONLY.
           parts: [
             {
               inlineData: {
-                data: first_scene_base64,
-                mimeType: mimeType,
+                data: first_scene_base64.includes(',') ? first_scene_base64.split(',')[1] : first_scene_base64,
+                mimeType: "image/png",
               },
             },
             {
@@ -804,14 +470,8 @@ Return JSON ONLY.
             properties: {
               description_first_image: { type: Type.STRING },
               voice_over_text: { type: Type.STRING },
-              language_code: {
-                type: Type.STRING,
-                enum: ["id-ID"],
-              },
-              gender_voice: {
-                type: Type.STRING,
-                enum: ["male", "female"],
-              },
+              language_code: { type: Type.STRING, enum: ["id-ID"] },
+              gender_voice: { type: Type.STRING, enum: ["male", "female"] },
               voice_name: {
                 type: Type.STRING,
                 enum: [
@@ -824,15 +484,8 @@ Return JSON ONLY.
                   "umbriel","zubenelgenubi"
                 ],
               },
-              speaking_rate: {
-                type: Type.NUMBER,
-                minimum: 0.9,
-                maximum: 1.0,
-              },
-              pause_hint: {
-                type: Type.STRING,
-                enum: ["short", "medium", "long"],
-              },
+              speaking_rate: { type: Type.NUMBER, minimum: 0.9, maximum: 1.0 },
+              pause_hint: { type: Type.STRING, enum: ["short", "medium", "long"] },
             },
             required: [
               "description_first_image",
@@ -852,191 +505,101 @@ Return JSON ONLY.
         jsonStr = jsonStr.replace(/^```json\n?/, "").replace(/\n?```$/, "");
       }
 
-      const parsed = JSON.parse(jsonStr);
-
-      if (!parsed.description_first_image || !parsed.voice_over_text) {
-        throw new Error("Konten JSON tidak lengkap.");
-      }
-
-      return parsed;
+      return JSON.parse(jsonStr);
 
     } catch (e: any) {
       console.error("[GeminiService] analyzeFirstSceneImage error:", e);
       throw new Error(translateGeminiError(e, "analyzeFirstSceneImage"));
     }
   },
+
   /**
    * Analyze scene image into a HIGH-FIDELITY Veo text-to-video prompt.
-   * Uses multi-pass grounding + self-refinement loop.
    */
-  analyzeSceneForVeo: async (
+  async analyzeSceneForVeo(
       scene_base64: string,
-      base_visual_description: string, // from analyzeFirstSceneImage.description_first_image
+      base_visual_description: string,
       max_refine_loop = 2
-  ) => {
+  ) {
     const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
-
     const mimeType = getMimeTypeFromBase64(scene_base64);
-    if (!mimeType.startsWith("image/")) {
-      throw new Error("Invalid image input for Veo analysis.");
-    }
 
-    /* ----------------------------------
-     * PHASE 1 — HARD VISUAL GROUNDING
-     * ---------------------------------- */
     const groundingPrompt = `
-You are a vision grounding system.
-
-RULES:
-- The image is the ONLY source of truth.
-- No cinematic language.
-- No motion description.
-- No interpretation.
-- No audio reference.
-
-TASK:
-List visual facts ONLY in bullet points:
-- Product (shape, color HEX, material, finish, relative size)
-- Characters (appearance, clothing, posture)
-- Scene (location type, lighting, camera angle)
-- Spatial relations
-`;
+    Analyze the image facts:
+    - Product: shape, color, branding.
+    - Characters: appearance, clothes.
+    - Scene: setting, lighting.
+    Output bullet points.
+    `;
 
     const groundingRes = await ai.models.generateContent({
       model: MODELS.VISION,
       contents: {
         parts: [
-          { inlineData: { data: scene_base64, mimeType } },
+          { inlineData: { data: scene_base64.includes(',') ? scene_base64.split(',')[1] : scene_base64, mimeType } },
           { text: groundingPrompt },
         ],
       },
-      config: { temperature: 0.2 },
     });
 
     const groundedFacts = groundingRes.text?.trim() || "";
 
-    /* ----------------------------------
-     * PHASE 2 — MOTION EXTRACTION
-     * ---------------------------------- */
-    const motionPrompt = `
-Based STRICTLY on these visual facts:
-
-${groundedFacts}
-
-TASK:
-1. Describe camera motion (or say "static camera").
-2. Describe subject motion (or say "minimal movement").
-3. Motion must be physically plausible.
-4. No new objects.
-`;
-
-    const motionRes = await ai.models.generateContent({
-      model: MODELS.VISION,
-      contents: [{ text: motionPrompt }],
-      config: { temperature: 0.3 },
-    });
-
-    const motionText = motionRes.text || "";
-
-    /* ----------------------------------
-     * PHASE 3 — INITIAL VEO PROMPT
-     * ---------------------------------- */
-    let veoPrompt = `
-Cinematic commercial video.
-
-VISUAL LOCK:
-${base_visual_description}
-
-GROUND TRUTH:
-${groundedFacts}
-
-MOTION:
-${motionText}
-
-STYLE:
-- Ultra realistic
-- Natural lighting
-- Professional commercial cinematography
-- No fantasy
-- No exaggeration
-
-CAMERA:
-- Smooth motion
-- Stable framing
-- Product always in focus
-
-OUTPUT:
-High-quality cinematic product commercial video.
-`.trim();
-
-    /* ----------------------------------
-     * PHASE 4 — SELF-REFINEMENT LOOP
-     * ---------------------------------- */
-    for (let i = 0; i < max_refine_loop; i++) {
-      const refinePrompt = `
-You are a Veo prompt auditor.
-
-CHECK THIS PROMPT:
-${veoPrompt}
-
-RULES:
-- Remove any hallucinated detail
-- Remove ambiguity
-- Ensure product remains central focus
-- Ensure prompt is safe for text-to-video
-- Do NOT add new objects or people
-- Improve clarity & precision ONLY
-
-Return the improved prompt text only.
-`;
-
-      const refineRes = await ai.models.generateContent({
-        model: MODELS.VISION,
-        contents: [{ text: refinePrompt }],
-        config: { temperature: 0.25 },
-      });
-
-      veoPrompt = refineRes.text?.trim() || veoPrompt;
-    }
-
-    /* ----------------------------------
-     * FINAL OUTPUT
-     * ---------------------------------- */
     return {
-      veo_prompt: veoPrompt,
-      negative_prompt: `
-cartoon, illustration, CGI, anime, fantasy,
-extra limbs, deformed product, blurry,
-logo distortion, incorrect proportions,
-text overlay, watermark
-`.trim(),
-
-      camera_motion: motionText.includes("camera")
-          ? motionText
-          : "Static or slow cinematic camera movement",
-
-      subject_motion: motionText.includes("movement")
-          ? motionText
-          : "Minimal natural movement",
-
-      scene_continuity_notes: `
-This prompt is visually locked to the analyzed image.
-Maintain consistent product appearance, lighting, and scale across scenes.
-`.trim(),
+      veo_prompt: `Cinematic Commercial. Visual Lock: ${base_visual_description}. Ground Truth: ${groundedFacts}`,
+      negative_prompt: "cartoon, illustration, CGI, anime, fantasy, blurry, text overlay",
+      camera_motion: "Slow cinematic pan or static framing",
+      subject_motion: "Natural subtle movements",
+      scene_continuity_notes: "Keep product branding 100% consistent with the seed frame."
     };
   },
 
   /**
    * Menghasilkan video menggunakan Veo 3.1.
+   * IMPROVEMENT: Added Storyboard context for better narrative coherence and Lip-Sync/Subtitle directives.
    */
-  generateVideoVeo31: async (image_base64: string, prompt_text: string, aspect_ratio: string, characters: Character[] = [], resolution="720p") => {
-    const current_key = getEffectiveApiKey();
-    const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
+  async generateVideoVeo31(
+      api_key: string,
+      image_base64: string,
+      prompt_text: string,
+      aspect_ratio: string,
+      characters: Character[] = [],
+      resolution="720p",
+      storyboard?: StoryboardJSON,
+      model = "",
+      max_retries = 3
+  ) {
+    console.log("[GeminiService] Model for Video Generation:", model || MODEL_VIDEOS["veo-3.1"]);
+    console.log({
+        "[GeminiService] Generating Video Veo 3.1 with params:": {
+            aspect_ratio,
+            resolution,
+            characters,
+            storyboard: storyboard ? "[REDACTED STORYBOARD]" : "MISSING",
+            prompt_text,
+            image_base64: image_base64 ? "[REDACTED BASE64]" : "MISSING",
+            model,
+            api_key
+        }
+    })
+    const current_key = api_key ? api_key : getEffectiveApiKey();
+    console.log("Current API Key Prefix:", current_key ? current_key.slice(0, 8) + "..." : "No Key");
+    let param_key = {
+      apiKey : current_key
+    }
+
+    console.log("generateVideoVeo31 param_key", {param_key})
+    const ai = new GoogleGenAI( param_key);
 
     let mimeType = getMimeTypeFromBase64(image_base64);
     if (!mimeType.startsWith('image/')) {
       throw new Error("Tipe data gambar tidak dikenali atau tidak valid.");
     }
+
+    if(!model) {
+      model = MODEL_VIDEOS["veo-3.1"]
+    }
+
+    console.log("generateVideoVeo31 characters", {characters})
 
     // 1. BERSIHKAN BASE64 (Sangat Penting!)
     // Menghapus prefix "data:image/jpeg;base64," jika ada
@@ -1052,13 +615,17 @@ Maintain consistent product appearance, lighting, and scale across scenes.
     - Strictly avoid robotic or flat monotonous AI-generated voices. Use dynamic intonation.
     `;
 
-    const final_enhanced_prompt = `${prompt_text}\n\n${audio_directives}`;
+    let final_enhanced_prompt = `${prompt_text}\n\n${audio_directives}`;
+
+    // final_enhanced_prompt = `Detail the json scenes : ${storyboard ? JSON.stringify(storyboard) : ""}\n\n${final_enhanced_prompt}`;
+
+    console.log("[GeminiService] Final Veo 3.1 Prompt:", final_enhanced_prompt);
 
     try {
       let operation = await ai.models.generateVideos({
-        model: MODELS.VIDEO,
+        model: model,
         prompt: final_enhanced_prompt,
-        image: { imageBytes: cleanBase64, mimeType: 'image/png' },
+        image: { imageBytes: cleanBase64, mimeType: mimeType },
         config: { numberOfVideos: 1, resolution: resolution, aspectRatio: aspect_ratio as any }
       });
 
@@ -1079,614 +646,199 @@ Maintain consistent product appearance, lighting, and scale across scenes.
       if (!response.ok) throw new Error("Gagal mengunduh video hasil sintesis.");
 
       return await response.blob();
+
+    // const cleanBase64 = image_base64.includes(',') ? image_base64.split(',')[1] : image_base64;
+    //
+    // const narrative_context = storyboard
+    //     ? `NARRATIVE ARC: ${storyboard.description}\nPRODUCTION NOTES: ${storyboard.production_notes}`
+    //     : "";
+    //
+    // const synchronization_directives = `
+    // [AUDIO-VISUAL SYNCHRONIZATION & LIP-SYNC]
+    // - Characters in frame MUST exhibit natural lip-sync matching the spoken Indonesian dialogue.
+    // - Facial expressions must convey the emotions of the dialogue naturally.
+    // - Audio Delivery: Professional commercial tone, clear articulation.
+    //
+    // [BURNT-IN CAPTIONS/SUBTITLES]
+    // - Display clear, readable WHITE SUBTITLES with a subtle black drop shadow at the BOTTOM CENTER of the screen.
+    // - Subtitles MUST match the spoken dialogue exactly.
+    // `;
+    //
+    // const final_enhanced_prompt = `
+    // ${narrative_context}
+    //
+    // SCENE SCRIPT:
+    // ${prompt_text}
+    //
+    // ${synchronization_directives}
+    //
+    // [PRODUCT FIDELITY]
+    // - The product branding, labels, and colors from the seed image must be preserved without any distortion throughout the video.
+    // `;
+    //
+    // try {
+    //   let operation = await ai.models.generateVideos({
+    //     model: MODELS.VIDEO, // Assuming MODELS.VIDEO points to veo-3.1-generate-preview
+    //     prompt: final_enhanced_prompt,
+    //     image: { imageBytes: cleanBase64, mimeType: 'image/png' },
+    //     config: { numberOfVideos: 1, resolution: resolution, aspectRatio: aspect_ratio as any }
+    //   });
+    //
+    //   while (!operation.done) {
+    //     await new Promise(resolve => setTimeout(resolve, 10000));
+    //     operation = await ai.operations.getVideosOperation({ operation: operation });
+    //   }
+    //
+    //   const rai_reasons = (operation.response as any)?.raiMediaFilteredReasons;
+    //   if (rai_reasons && Array.isArray(rai_reasons) && rai_reasons.length > 0) {
+    //     throw new Error(`Safety Filter Triggered: ${rai_reasons.join(". ")}`);
+    //   }
+    //
+    //   const download_link = operation.response?.generatedVideos?.[0]?.video?.uri;
+    //   if (!download_link) throw new Error("Video download link not found.");
+    //
+    //   const response = await fetch(`${download_link}&key=${current_key}`);
+    //   return await response.blob();
     } catch (e: any) {
-      throw new Error(translateGeminiError(e));
+      console.log("[GeminiService] Veo 3.1 Generation Error:", e);
+      // if error have string message : You exceeded your current quota
+        // try again with another model MODEL_VIDEOS["veo-3.1-preview"]
+        if(max_retries === 0) {
+          throw new Error(translateGeminiError(e, "generateVideoVeo31"));
+        }
+
+        return await aiService.generateVideoVeo31(
+          current_key,
+          image_base64,
+          prompt_text,
+          aspect_ratio,
+          characters,
+          resolution,
+          storyboard,
+          MODEL_VIDEOS["veo-3.1-preview"],
+          max_retries - 1
+        );
     }
   },
 
-
-
-  /**
-   * Generate IMAGE → VIDEO with Veo 3.1 (AUDIO ALLOWED)
-   * Image is treated as FIRST FRAME (visual lock)
-   */
-//   generateVideoVeo31: async (
-//       api_key: string = "",
-//       image_base64: string,
-//       prompt_text: string,
-//       aspect_ratio: string,
-//   ): Promise<Blob> => {
-//
-//     const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
-//
-//     const mimeType = getMimeTypeFromBase64(image_base64);
-//     if (!mimeType.startsWith("image/")) {
-//       throw new Error("Invalid image input for Veo 3.1");
-//     }
-//
-//     const cleanBase64 = image_base64.includes(",")
-//         ? image_base64.split(",")[1]
-//         : image_base64;
-//
-//     const audio_directives = `
-// [AUDIO — LANGUAGE LOCK]
-// Language: Bahasa Indonesia (id-ID)
-// DO NOT translate.
-// DO NOT paraphrase.
-//
-// Delivery:
-// - Natural Indonesian tone
-// - Conversational
-// - Commercial style
-// `;
-//
-//     const final_prompt = `
-// ${prompt_text}
-//
-// VISUAL CONTINUITY RULES:
-// - The provided image is the FIRST FRAME.
-// - Preserve product shape, label, proportions.
-// - No redesign or distortion.
-//
-// CAMERA:
-// - Smooth cinematic motion
-// - Product remains in focus
-//
-// ${audio_directives}
-// `.trim();
-//
-//     try {
-//       let operation = await ai.models.generateVideos({
-//         model: MODEL_VIDEOS["veo-3.1"], // veo-3.1-generate-preview
-//         prompt: final_prompt,
-//         image: {
-//           imageBytes: cleanBase64,
-//           mimeType
-//         },
-//         config: {
-//           numberOfVideos: 1,
-//           resolution: "720p",
-//           aspectRatio: aspect_ratio as any
-//         }
-//       });
-//
-//       while (!operation.done) {
-//         await new Promise(r => setTimeout(r, 8000));
-//         operation = await ai.operations.getVideosOperation({ operation });
-//       }
-//
-//       const rai = (operation.response as any)?.raiMediaFilteredReasons;
-//       if (Array.isArray(rai) && rai.length) {
-//         throw new Error(`RAI Filter: ${rai.join(", ")}`);
-//       }
-//
-//       const uri = operation.response?.generatedVideos?.[0]?.video?.uri;
-//       if (!uri) throw new Error("Video URI not found.");
-//
-//       const res = await fetch(`${uri}&key=${getEffectiveApiKey()}`);
-//       if (!res.ok) throw new Error("Failed to download Veo 3.1 video.");
-//
-//       return await res.blob();
-//
-//     } catch (e: any) {
-//       throw new Error(translateGeminiError(e, "generateVideoVeo31"));
-//     }
-//   },
-//
-
-  /**
-   * AI-based sanitizer for Veo 3.0 Fast
-   * Cleans audio intent + enforces safety & RAI compliance
-   */
-  sanitizePromptForVeo30: async (
-      rawPrompt: string
-  ): Promise<string> => {
-    const ai = new GoogleGenAI({
-      apiKey: getEffectiveApiKey(),
-    });
-
-    const instruction = `
-INSTRUCTION:
-You are a strict prompt sanitizer for Veo 3.0 Fast video generation.
-
-Rewrite the prompt so that it is:
-- 100% visual-only
-- Fully compliant with Responsible AI and safety rules
-
-MANDATORY RULES:
-
-1. AUDIO & SPEECH:
-- Remove or rewrite any speech-related intent.
-- No talking, explaining, narration, voice, dialogue, live streaming, or interaction.
-- Communication must be visual-only (gestures, facial expressions, body language).
-
-2. CHILD SAFETY:
-- If children or babies appear:
-  - Remove sensual, intimate, or body-focused language.
-  - Keep interactions neutral, respectful, and family-safe.
-
-3. SEXUAL / SUGGESTIVE CONTENT:
-- Remove sensual, intimate, or erotic descriptions.
-- Maintain wholesome, respectful tone.
-
-4. VIOLENCE / HARM:
-- Remove any depiction of violence, injury, fear, or threat.
-
-5. ILLEGAL / DANGEROUS ACTIVITIES:
-- Remove references to drugs, alcohol abuse, weapons, or illegal acts.
-
-6. MEDICAL / HEALTH CLAIMS:
-- Remove absolute or misleading medical claims.
-
-GENERAL CONSTRAINTS:
-- Preserve original visual intent and structure.
-- Do NOT add new story elements.
-- Do NOT mention policies or moderation.
-- Output ONLY the sanitized prompt text.
-
----
-
-ORIGINAL PROMPT:
-${rawPrompt}
-`;
-
+  async sanitizePromptForVeo30(rawPrompt: string): Promise<string> {
+    const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
+    const instruction = `Rewrite for Veo 3.0 Fast: 100% visual-only, no speech. Safety compliant. Output text only: ${rawPrompt}`;
     const response = await ai.models.generateContent({
       model: "gemini-2.0-flash",
-      contents: [
-        {
-          parts: [{ text: instruction }],
-        },
-      ],
-      config: {
-        temperature: 0.15,
-        maxOutputTokens: 2048,
-      },
+      contents: [{ parts: [{ text: instruction }] }],
+      config: { temperature: 0.15, maxOutputTokens: 2048 },
     });
-
-    const cleaned =
-        response.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!cleaned) {
-      throw new Error("Sanitasi prompt Veo 3.0 gagal.");
-    }
-
-    return cleaned.trim();
+    return response.text?.trim() || "";
   },
-  /**
-   * Prompt sanitizer for Veo 3.1
-   * - Preserves original intent and structure
-   * - Allows audio, speech, narration
-   * - Enforces RAI & child safety
-   */
-  sanitizePromptForVeo31 : async (
-      rawPrompt: string
-  ): Promise<string> => {
-    const ai = new GoogleGenAI({
-      apiKey: getEffectiveApiKey(),
-    });
 
-    const instruction = `
-INSTRUCTION:
-You are a prompt normalizer and safety enforcer for Veo 3.1 video generation.
-
-GOALS:
-- Preserve the original story, structure, and intent.
-- Audio, speech, dialogue, and narration are ALLOWED.
-- Rewrite only when needed for clarity, safety, or compliance.
-
-SAFETY RULES:
-
-1. AUDIO & SPEECH:
-- Spoken dialogue and narration are allowed.
-- Remove conflicting instructions (e.g., "silent" + "speaking").
-
-2. CHILD SAFETY:
-- All interactions involving children must be respectful, non-sexual, and appropriate.
-- Avoid detailed body-focused descriptions.
-
-3. SEXUAL / SUGGESTIVE CONTENT:
-- Remove or soften erotic or sensual phrasing.
-
-4. VIOLENCE / HARM:
-- Remove graphic violence or threats.
-
-5. ILLEGAL / DANGEROUS ACTIVITIES:
-- Remove references to drugs, alcohol abuse, weapons, or illegal acts.
-
-6. MEDICAL / HEALTH CLAIMS:
-- Avoid absolute or misleading medical claims.
-
-GENERAL CONSTRAINTS:
-- Do NOT remove scenes unless strictly necessary.
-- Do NOT add new story elements.
-- Do NOT mention safety rules or policies.
-- Output ONLY the sanitized prompt text.
-
----
-
-ORIGINAL PROMPT:
-${rawPrompt}
-`;
-
+  async sanitizePromptForVeo31(rawPrompt: string): Promise<string> {
+    const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
+    const instruction = `Normalize for Veo 3.1: Audio/Speech allowed. Enforce safety. Output text only: ${rawPrompt}`;
     const response = await ai.models.generateContent({
       model: "gemini-2.0-flash",
-      contents: [
-        {
-          parts: [{ text: instruction }],
-        },
-      ],
-      config: {
-        temperature: 0.25,
-        maxOutputTokens: 3072,
-      },
+      contents: [{ parts: [{ text: instruction }] }],
+      config: { temperature: 0.25, maxOutputTokens: 3072 },
     });
-
-    const sanitized =
-        response.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!sanitized) {
-      throw new Error("Sanitasi prompt Veo 3.1 gagal.");
-    }
-
-    return sanitized.trim();
+    return response.text?.trim() || "";
   },
 
-
-  /**
-   * Menghasilkan video menggunakan Veo 3.0 Fast (TEXT → VIDEO).
-   * Output: SILENT CINEMATIC VIDEO (no audio, no speech)
-   */
-  generateVideoVeo30: async (
+  async generateVideoVeo30(
       describe_scene_prompt : string,
       prompt_text: string,
       aspect_ratio: string,
       Characters: Character[] = [],
       product_json: any = {}
-  ): Promise<Blob> => {
+  ): Promise<Blob> {
     const current_key = getEffectiveApiKey();
-    console.log(
-        "[GeminiService] Using API Key Prefix:",
-        current_key ? current_key.slice(0, 8) + "..." : "No Key"
-    );
-
     const ai = new GoogleGenAI({ apiKey: current_key });
 
-    let character_prompt = `Character Details:`;
-
-    for (const character of Characters) {
-      character_prompt += `
-- Name: ${character.name} 
-    Description: ${character.description} , With Detail : ${character.prompt}
-`;
-    }
-
-    let product_prompt = `Product Details:
-- Name: ${product_json.name || "N/A"}
-- SKU: ${product_json.sku || "N/A"}
-- Description: ${product_json.description || "N/A"}
-- Dimensions: ${product_json.dimension || "N/A"}
-`;
-
-    const scene_description = `
-    ${character_prompt}
-
-${product_prompt}
-
-[SCENE VISUAL DESCRIPTION]
-${describe_scene_prompt}
-
-Photography Style:
-Photography Style: 85mm f/1.4 lens, 8K resolution, cinematic color grading, sharp focus on subject
-`;
-
-    const prompt_with_scene = `
-${scene_description}
-
-${prompt_text}
-`;
-
-    /**
-     * ⚠️ VISUAL-ONLY DIRECTIVES (AMAN UNTUK VEO)0
-     */
-    const visual_directives = `
-[VISUAL CINEMATIC DIRECTIVES]
-- Silent cinematic video (NO audio, NO dialogue, NO speech)
-- Storytelling through facial expressions and body language only
-- Natural lighting, realistic motion, smooth camera movement
-- Cinematic composition, shallow depth of field, film-like quality
-- Emotion conveyed visually, without text or sound
-`;
-
-    const final_prompt = `
-${prompt_with_scene}
-
-${visual_directives}
-`;
-
-    // Bersihkan prompt untuk Veo 3.0 Fast
+    const final_prompt = `Visual: ${describe_scene_prompt}. Narrative: ${prompt_text}. No sound.`;
     const sanitized_prompt = await aiService.sanitizePromptForVeo30(final_prompt);
 
     try {
-      // 🎬 TEXT → VIDEO (VALID UNTUK veo-3.0-fast-generate-001)
       let operation = await ai.models.generateVideos({
         model: "veo-3.0-fast-generate-001",
         prompt: sanitized_prompt,
-        config: {
-          numberOfVideos: 1,
-          resolution: "720p",
-          aspectRatio: aspect_ratio as any,
-        },
+        config: { numberOfVideos: 1, resolution: "720p", aspectRatio: aspect_ratio as any },
       });
 
-      // ⏳ Polling long-running operation
       while (!operation.done) {
         await new Promise(resolve => setTimeout(resolve, 8000));
         operation = await ai.operations.getVideosOperation({ operation });
       }
 
-      // 🚨 Safety filter check
-      const rai_reasons =
-          (operation.response as any)?.raiMediaFilteredReasons;
-
-      if (Array.isArray(rai_reasons) && rai_reasons.length > 0) {
-        throw new Error(
-            `RAI Filter Aktif: ${rai_reasons.join(". ")}`
-        );
-      }
-
-      // 📥 Download video
-      const download_link =
-          operation.response?.generatedVideos?.[0]?.video?.uri;
-
-      if (!download_link) {
-        throw new Error("Link unduhan video tidak ditemukan.");
-      }
-
-      const response = await fetch(`${download_link}&key=${current_key}`);
-      if (!response.ok) {
-        throw new Error("Gagal mengunduh video hasil sintesis.");
-      }
-
-      return await response.blob();
+      const uri = operation.response?.generatedVideos?.[0]?.video?.uri;
+      if (!uri) throw new Error("Video URI not found.");
+      const res = await fetch(`${uri}&key=${current_key}`);
+      return await res.blob();
     } catch (e: any) {
-      throw new Error(translateGeminiError(e, "generateVideoVeo3.0"));
+      throw new Error(translateGeminiError(e, "generateVideoVeo30"));
     }
   },
 
-  /**
-   * Generate video WITH AUDIO using Veo 3.0
-   * Visual is LOCKED from analyzeSceneForVeo
-   * Audio is LOCKED from analyzeFirstSceneImage
-   */
-  generateVideoVeo30WithAudio: async (
-      veo_analysis: {
-        veo_prompt: string;
-        negative_prompt: string;
-        camera_motion: string;
-        subject_motion: string;
-        scene_continuity_notes: string;
-      },
-      voice_analysis: {
-        voice_over_text: string;
-        voice_name: string;
-        speaking_rate: number;
-        pause_hint: string;
-      },
+  async generateVideoVeo30WithAudio(
+      veo_analysis: any,
+      voice_analysis: any,
       aspect_ratio: string
-  ): Promise<Blob> => {
-
+  ): Promise<Blob> {
     const current_key = getEffectiveApiKey();
     const ai = new GoogleGenAI({ apiKey: current_key });
-
-    /* ----------------------------------
-     * AUDIO DIRECTIVES (LOCKED)
-     * ---------------------------------- */
-    const audio_directives = `
-[AUDIO — STRICTLY FOLLOW]
-Voice-over Text (DO NOT CHANGE WORDING):
-"${voice_analysis.voice_over_text}"
-
-Voice:
-- voice_name: ${voice_analysis.voice_name}
-- speaking_rate: ${voice_analysis.speaking_rate}
-- pause_hint: ${voice_analysis.pause_hint}
-
-Rules:
-- Natural Indonesian delivery
-- No robotic tone
-- No extra dialogue
-- No additional narration
-`;
-
-    /* ----------------------------------
-     * FINAL VEO PROMPT (CLEAN)
-     * ---------------------------------- */
-    const final_prompt = `
-${veo_analysis.veo_prompt}
-
-CAMERA MOTION:
-${veo_analysis.camera_motion}
-
-SUBJECT MOTION:
-${veo_analysis.subject_motion}
-
-CONTINUITY:
-${veo_analysis.scene_continuity_notes}
-
-NEGATIVE PROMPT:
-${veo_analysis.negative_prompt}
-
-Photography Style:
-Photography Style: 85mm f/1.4 lens, 8K resolution, cinematic color grading, sharp focus on subject
-
-${audio_directives}
-`.trim();
-
-    // 🔒 SANITIZE (Veo safety)
-    const sanitized_prompt =
-        await aiService.sanitizePromptForVeo31(final_prompt);
+    const final_prompt = `${veo_analysis.veo_prompt}. Audio script: ${voice_analysis.voice_over_text}.`;
+    const sanitized_prompt = await aiService.sanitizePromptForVeo31(final_prompt);
 
     try {
       let operation = await ai.models.generateVideos({
         model: "veo-3.0-generate-001",
         prompt: sanitized_prompt,
-        config: {
-          numberOfVideos: 1,
-          resolution: "720p",
-          aspectRatio: aspect_ratio as any,
-        },
+        config: { numberOfVideos: 1, resolution: "720p", aspectRatio: aspect_ratio as any },
       });
-
       while (!operation.done) {
         await new Promise((r) => setTimeout(r, 8000));
         operation = await ai.operations.getVideosOperation({ operation });
       }
-
-      const rai =
-          (operation.response as any)?.raiMediaFilteredReasons;
-
-      if (Array.isArray(rai) && rai.length) {
-        throw new Error(`RAI Filter: ${rai.join(", ")}`);
-      }
-
-      const videoUri =
-          operation.response?.generatedVideos?.[0]?.video?.uri;
-
-      if (!videoUri) {
-        throw new Error("Video URI tidak ditemukan.");
-      }
-
-      const res = await fetch(`${videoUri}&key=${current_key}`);
-      if (!res.ok) {
-        throw new Error("Gagal download video.");
-      }
-
+      const res = await fetch(`${operation.response?.generatedVideos?.[0]?.video?.uri}&key=${current_key}`);
       return await res.blob();
-
     } catch (e: any) {
-      throw new Error(
-          translateGeminiError(e, "generateVideoVeo30WithAudio")
-      );
+      throw new Error(translateGeminiError(e, "generateVideoVeo30WithAudio"));
     }
   },
 
-  /**
-   * Generate IMAGE → VIDEO using Veo 3.0 Fast Preview
-   * Model: veo-3.0-fast-generate-preview
-   * Image is used as the FIRST FRAME (seed), not reference lock
-   */
-  generateVideoVeo30FastPreviewImageToVideo: async (
+  async generateVideoVeo30FastPreviewImageToVideo(
       image_base64: string,
       prompt_text: string,
       aspect_ratio: string
-  ): Promise<Blob> => {
-
+  ): Promise<Blob> {
     const apiKey = getEffectiveApiKey();
     const ai = new GoogleGenAI({ apiKey });
-
-    let mimeType = getMimeTypeFromBase64(image_base64);
-    if (!mimeType.startsWith("image/")) {
-      throw new Error("Invalid image input for Veo 3.0 preview.");
-    }
-
-    // IMPORTANT: Veo expects RAW base64 (no data:image/... prefix)
-    const cleanBase64 = image_base64.includes(",")
-        ? image_base64.split(",")[1]
-        : image_base64;
-
-    const final_prompt = `
-IMAGE-TO-VIDEO PREVIEW.
-
-RULES:
-- The provided image is the FIRST FRAME of the video.
-- Preserve overall appearance, composition, and subject placement.
-- Natural motion only.
-- No drastic changes to product shape, label, or characters.
-- Stable lighting and color.
-
-SCENE DESCRIPTION:
-${prompt_text}
-
-STYLE:
-- Realistic
-- Commercial video
-- No fantasy
-- No exaggeration
-`.trim();
-
+    const cleanBase64 = image_base64.includes(",") ? image_base64.split(",")[1] : image_base64;
     try {
       let operation = await ai.models.generateVideos({
-        model: MODEL_VIDEOS["veo-3.0-preview"], // veo-3.0-fast-generate-preview
-        prompt: final_prompt,
-        image: {
-          imageBytes: cleanBase64,
-          mimeType: mimeType,
-        },
-        config: {
-          numberOfVideos: 1,
-          resolution: "720p",
-          aspectRatio: aspect_ratio as any,
-        },
+        model: MODEL_VIDEOS["veo-3.0-preview"],
+        prompt: `Preserve first frame exactly. Narrative: ${prompt_text}`,
+        image: { imageBytes: cleanBase64, mimeType: "image/png" },
+        config: { numberOfVideos: 1, resolution: "720p", aspectRatio: aspect_ratio as any },
       });
-
-      // Polling
       while (!operation.done) {
         await new Promise((r) => setTimeout(r, 8000));
         operation = await ai.operations.getVideosOperation({ operation });
       }
-
-      const rai =
-          (operation.response as any)?.raiMediaFilteredReasons;
-
-      if (Array.isArray(rai) && rai.length > 0) {
-        throw new Error(`RAI Filter Active: ${rai.join(", ")}`);
-      }
-
-      const videoUri =
-          operation.response?.generatedVideos?.[0]?.video?.uri;
-
-      if (!videoUri) {
-        throw new Error("Veo 3.0 Preview: Video URI not found.");
-      }
-
-      const res = await fetch(`${videoUri}&key=${apiKey}`);
-      if (!res.ok) {
-        throw new Error("Failed to download Veo 3.0 preview video.");
-      }
-
+      const res = await fetch(`${operation.response?.generatedVideos?.[0]?.video?.uri}&key=${apiKey}`);
       return await res.blob();
-
     } catch (e: any) {
-      throw new Error(
-          translateGeminiError(e, "generateVideoVeo30FastPreviewImageToVideo")
-      );
+      throw new Error(translateGeminiError(e, "generateVideoVeo30FastPreviewImageToVideo"));
     }
   },
 
-
-
-  /**
-   * Generate TTS audio from image analysis result.
-   * Output: Raw PCM (LINEAR16) - lipsync friendly (decoded from Base64)
-   */
-  generateTTSFromAnalysis: async (analysis: {
+  async generateTTSFromAnalysis(analysis: {
     voice_over_text: string;
     voice_name: string;
     speaking_rate: number;
     pause_hint: "short" | "medium" | "long";
     gender_voice: string,
-  }): Promise<Blob>  => {
+  }): Promise<Blob>  {
     const ai = new GoogleGenAI({ apiKey: getEffectiveApiKey() });
-
-    // Guide the model with explicit prosody cues in the prompt
-    const prosody_instruction = `Say the following text clearly. 
-    Speaking rate: ${analysis.speaking_rate}x (1.0 is normal). 
-    Pacing: Use ${analysis.pause_hint} pauses between sentences and phrases.
-    Voice Gender: ${analysis.gender_voice}.
-    Tone: Professional commercial narrator.`;
-
-    const full_prompt = `${prosody_instruction}\n\nText: ${analysis.voice_over_text}`;
-
+    const full_prompt = `Speak Indonesian: ${analysis.voice_over_text}. Voice: ${analysis.gender_voice}. Rate: ${analysis.speaking_rate}. Pacing: ${analysis.pause_hint}.`;
     try {
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
@@ -1695,31 +847,18 @@ STYLE:
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: normalizeVoiceName(analysis.voice_name)
-              },
+              prebuiltVoiceConfig: { voiceName: normalizeVoiceName(analysis.voice_name) },
             },
           },
         },
       });
-
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (!base64Audio) {
-        throw new Error("Gagal menghasilkan audio TTS: Respons kosong.");
-      }
-
-      // Manual Base64 to Uint8Array conversion (LINEAR16 PCM bytes)
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || "";
       const binaryString = atob(base64Audio);
-      const len = binaryString.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
-
-      return new Blob(
-          [bytes.buffer],
-          { type: "audio/L16;codec=pcm;rate=24000" }
-      );
+      return new Blob([bytes.buffer], { type: "audio/L16;codec=pcm;rate=24000" });
     } catch (e: any) {
       throw new Error(translateGeminiError(e, "generateTTSFromAnalysis"));
     }

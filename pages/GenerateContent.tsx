@@ -148,6 +148,8 @@ const GenerateContent: React.FC = () => {
 
             const product_b64 = await urlToBase64(product_img_url);
 
+            console.log("[StartProduction] Product base64 prepared : ", product_b64.substring(0, 30) + "...");
+
             // IMPROVEMENT: Prepare character assets with full metadata and base64
             const target_chars_with_b64 = await Promise.all(target_chars.map(async c => {
                 const url = c.character_image_path
@@ -196,8 +198,16 @@ const GenerateContent: React.FC = () => {
                             // generate locked first product image
                             const product_b64_locked = await aiService.generateLockedProductImage(product_b64, form_data.aspect_ratio);
 
+                            let veo_prompt = ``;
+                            // concat description + map concat scenes.veo_visual_prompt with identity per scene number , exaple scene {scene_number}: {veo_visual_prompt}
+                            veo_prompt += storyboard_chunks[s_idx].description + " ";
+                            veo_prompt += storyboard_chunks[s_idx].scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
+
                             // IMPROVEMENT: Pass target_chars_with_b64 for consistency and multiple character support
                             const b64 = await aiService.generateFirstSceneImage(
+                                api_key,
+                                veo_prompt,
+                                form_data.prompt,
                                 storyboard_chunks[s_idx],
                                 product_b64_locked,
                                 target_chars_with_b64,
@@ -218,11 +228,6 @@ const GenerateContent: React.FC = () => {
                                 progress: 70
                             } : g));
 
-                            let veo_prompt = ``;
-                            // concat description + map concat scenes.veo_visual_prompt with identity per scene number , exaple scene {scene_number}: {veo_visual_prompt}
-                            veo_prompt += storyboard_chunks[s_idx].description + " ";
-                            veo_prompt += storyboard_chunks[s_idx].scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
-
                             if (form_data.model_video === MODEL_VIDEOS["veo-3.0-preview"]) {
 
                                 video_blob =
@@ -233,7 +238,7 @@ const GenerateContent: React.FC = () => {
                                     );
 
                             }else if(form_data.model_video === MODEL_VIDEOS["veo-3.1"]){
-                                video_blob = await aiService.generateVideoVeo31(b64, veo_prompt, form_data.aspect_ratio, target_chars, form_data.resolution);
+                                video_blob = await aiService.generateVideoVeo31(api_key, b64, veo_prompt, form_data.aspect_ratio, target_chars, form_data.resolution, storyboard_chunks[s_idx]);
                             }else{
                                 // if model_video is veo-3.0
                                 // analyze image first scene to describe prompt image
@@ -311,7 +316,7 @@ const GenerateContent: React.FC = () => {
                                     );
 
                             } else if(form_data.model_video === MODEL_VIDEOS["veo-3.1"]) {
-                                video_blob = await aiService.generateVideoVeo31(last_b64_image, veoPrompt, form_data.aspect_ratio, target_chars, form_data.resolution);
+                                video_blob = await aiService.generateVideoVeo31(api_key, last_b64_image, veoPrompt, form_data.aspect_ratio, target_chars, form_data.resolution, storyboard_chunks[s_idx]);
                             }else{
                                 // set step analyze scene
                                 await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.ANALYZING_SCENE);
@@ -473,18 +478,35 @@ const GenerateContent: React.FC = () => {
     };
 
     const changeApiKey = (changed_value) => {
-        if(!changed_value) {
-            set_api_key(null)
-            set_form_data({...form_data, gemini_api_key_id: null});
-            return
+        console.log("Changed API Key Gemini:", changed_value);
+
+        // 1. Cek apakah changed_value ada
+        // 2. Cek apakah changed_value.item ada
+        if (!changed_value || !changed_value.item) {
+            localStorage.setItem("api_key", process.env.API_KEY)
+            set_api_key(null);
+            set_form_data({ ...form_data, gemini_api_key_id: null });
+            return;
         }
 
-        const [api_key_id, api_key_value] = changed_value.split("--");
+        const item = changed_value.item;
 
-        set_api_key(api_key_value);
-        set_form_data({...form_data, gemini_api_key_id: api_key_id});
-        showToast("API Key Gemini diperbarui", "success");
+        // Pastikan properti key_value memang ada di dalam item
+        if (item && item.key_value) {
+            localStorage.setItem("api_key", item.key_value)
+            set_api_key(item.key_value);
+            set_form_data({ ...form_data, gemini_api_key_id: changed_value.value });
+            showToast("API Key Gemini diperbarui", "success");
+        } else {
+            console.error("Properti key_value tidak ditemukan dalam item:", item);
+        }
     }
+
+
+    useEffect(() => {
+        console.log("[API Key] Updated:", api_key);
+        console.log("[FormData] Updated:", form_data);
+    }, [api_key, form_data]);
 
     return (
         <div className="p-8 max-w-[1920px] mx-auto space-y-8 animate-in fade-in duration-500">
@@ -532,24 +554,24 @@ const GenerateContent: React.FC = () => {
 
                                 </div>
 
-                                {/*/!*if model_video is "veo-3.1", show select2 (using Select2 Component ) for get api keys mabarService.getApiKeys()*!/*/}
-                                {/*/!*if model_video is veo-3.0 hide select2 for api keys*!/*/}
-                                {/*<div className={form_data.model_video === MODEL_VIDEOS["veo-3.1"] ? "block" : "hidden"}>*/}
-                                {/*    <Select2Async*/}
-                                {/*        label="Pilih API Key Gemini"*/}
-                                {/*        endpoint={`${API_BASE_URL}/api_keys`}*/}
-                                {/*        placeholder="Cari Key..."*/}
-                                {/*        mapResponse={(data) => {*/}
-                                {/*            // Tambahkan optional chaining agar tidak error jika data kosong*/}
-                                {/*            const key_managements = data?.key_managements || [];*/}
-                                {/*            return key_managements.map((k: any) => ({*/}
-                                {/*                value: k.id.toString() + "--" + k.key_value,*/}
-                                {/*                label: k.key_name*/}
-                                {/*            }));*/}
-                                {/*        }}*/}
-                                {/*        onChange={(val) => changeApiKey(val)}*/}
-                                {/*    />*/}
-                                {/*</div>*/}
+                                {/*if model_video is "veo-3.1", show select2 (using Select2 Component ) for get api keys mabarService.getApiKeys()*/}
+                                {/*if model_video is veo-3.0 hide select2 for api keys*/}
+                                <div className={form_data.model_video === MODEL_VIDEOS["veo-3.1"] ? "block" : "hidden"}>
+                                    <Select2Async
+                                        label="Pilih API Key Gemini"
+                                        endpoint={`${API_BASE_URL}/api_keys`}
+                                        placeholder="Cari Key..."
+                                        mapResponse={(data) => {
+                                            const key_managements = data?.key_managements || [];
+                                            return key_managements.map((k: any) => ({
+                                                value: k.id.toString(),
+                                                label: k.key_name,
+                                                item: k // Pastikan 'k' memiliki properti 'key_value'
+                                            }));
+                                        }}
+                                        onChange={(val) => changeApiKey(val)}
+                                    />
+                                </div>
 
                                 <div className="space-y-4">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 block">Pilih Produk</label>

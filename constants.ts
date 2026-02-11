@@ -27,9 +27,13 @@ export const MODELS = {
 export const MODEL_VIDEOS = {
   'veo-3.0' : 'veo-3.0-fast-generate-001',
   'veo-3.0-preview' : 'veo-3.0-fast-generate-preview',
-  // 'veo-3.1' : 'veo-3.1-fast-generate-preview',
-  'veo-3.1' : 'veo-3.1-generate-preview'
+  'veo-3.1' : 'veo-3.1-fast-generate-preview',
+  // 'veo-3.1' : 'veo-3.1-generate-preview'
+  'veo-3.1-preview' : 'veo-3.1-generate-preview'
 }
+
+export const PROJECT_ID = "ceremonial-rush-462106-a7";
+export const using_vertex = true; // Toggle penggunaan Vertex AI (true) atau API GenAI langsung (false)
 
 export const ALLOWED_GEMINI_VOICES = new Set([
   "achernar","aoede","autonoe","callirrhoe","despina","erinome",

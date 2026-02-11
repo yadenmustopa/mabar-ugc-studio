@@ -95,6 +95,11 @@ export const resizeImageToAspectRatio = async (imageUrl: string, aspectRatio: st
 };
 
 export const getMimeTypeFromBase64 = (base64String: string): string => {
+  console.log("Base64 String:", base64String);
+  if(!base64String){
+    throw new Error("Base64 string is empty" );
+  }
+
   // Mencari pattern antara "data:" dan ";base64"
   const match = base64String.match(/^data:([^;]+);base64,/);
   return match ? match[1] : 'image/jpeg'; // Default ke jpeg jika tidak ditemukan
@@ -102,7 +107,8 @@ export const getMimeTypeFromBase64 = (base64String: string): string => {
 
 
 export function pcmToWav(
-    pcmData: Uint8Array<any>,
+    // Fix: Remove generic <any> as Uint8Array is not a generic type
+    pcmData: Uint8Array,
     sampleRate = 24000
 ): Blob {
   const buffer = new ArrayBuffer(44 + pcmData.length);
