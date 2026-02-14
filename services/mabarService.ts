@@ -117,7 +117,7 @@ export const mabarApi = {
     },
 
     setUgcComplete: async (ugcId: string | number) => {
-        return axios.get(`${API_BASE_URL}/ugc/${ugcId}/complete`, { headers: getHeaders() });
+        return axios.post(`${API_BASE_URL}/ugc/${ugcId}/complete`, { headers: getHeaders() });
     },
 
     setUgcFail: async (ugcId: string | number, reason: string) => {

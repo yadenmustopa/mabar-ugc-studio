@@ -1,28 +1,18 @@
-import React, {useEffect, useState, useRef} from 'react';
+import React, {useEffect, useState} from 'react';
 import {mabarApi} from '../services/mabarService';
 import {aiService} from '../services/geminiService';
-import {Character, GenerationItem, ObjectStorage, Product, TaskStatus} from '../types';
-import {base64ToBlob, getMimeTypeFromBase64, pcmToWav, showToast, urlToBase64} from '../utils';
-import {
-    API_BASE_URL,
-    ASPECT_RATIOS,
-    AVG_DURATION_PER_VIDEO, BASE_URL_MABAR,
-    DEFAULT_MIN_DURATION,
-    MODEL_VIDEOS,
-    RESOLUTIONS,
-    URL_UPLOAD_ASSET
-} from '../constants';
-import {captureLastFrameFromVideoBlob} from "@/services/frameService";
-import Select2Async from "@/components/Select2Async";
+import {Character, GenerationItem, GenerationSceneImageItem, ObjectStorage, Product, TaskStatus} from '../types';
+import {base64ToBlob, ensureDataUrl, getMimeTypeFromBase64, showToast, urlToBase64} from '../utils';
+import {ASPECT_RATIOS, AVG_DURATION_PER_VIDEO, DEFAULT_MIN_DURATION, RESOLUTIONS, URL_UPLOAD_ASSET} from '../constants';
 
 const GenerateContent: React.FC = () => {
     const [products_list, set_products_list] = useState<Product[]>([]);
     const [characters_list, set_characters_list] = useState<Character[]>([]);
     const [storages_list, set_storages_list] = useState<ObjectStorage[]>([]);
     const [available_buckets, set_available_buckets] = useState<string[]>([]);
-    const [generations_list, set_generations_list] = useState<GenerationItem[]>([]);
+    const [generations_list, set_generations_list] = useState<GenerationSceneImageItem[]>([]);
     const [is_generating, setIs_generating] = useState(false);
-    const [api_key, set_api_key] = useState<string>('');
+    // const [api_key, set_api_key] = useState<string>('');
 
     const [form_data, set_form_data] = useState({
         name: '',
@@ -36,8 +26,8 @@ const GenerateContent: React.FC = () => {
         min_duration: DEFAULT_MIN_DURATION,
         object_storage_id: '',
         bucket: '',
-        model_video: MODEL_VIDEOS["veo-3.1"],
-        gemini_api_key_id: null,
+        // model_video: MODEL_VIDEOS["veo-3.1"],
+        // gemini_api_key_id: null,
     });
 
     useEffect(() => {
@@ -81,6 +71,29 @@ const GenerateContent: React.FC = () => {
             }));
         }
     };
+
+
+    const standardImageToVideoPrompt = (veo_prompt, additional_prompt, characters) =>{
+        const audio_directives = `
+            [AUDIO CHARACTERISTICS & VOCAL DESIGN]
+            - Vocal Realism: High-fidelity natural human speech, relaxed (santai) and authentic tone.
+            - Sound Cues: Include subtle human-like filler words, natural pauses, and organic breaths between sentences.
+            - Acoustics: Sound environment must resonate naturally with the setting.
+            - Unique Voice Profiles:
+            ${characters.map(c => `  * ${c.name} (${c.gender}): Voice should be distinct and characteristic of their persona.`).join('\n')}
+            - Strictly avoid robotic or flat monotonous AI-generated voices. Use dynamic intonation.
+            `;
+
+        return `
+            [[Todo]]
+            ${additional_prompt}
+            Create the SCENE: ${veo_prompt}
+            
+            [[output]]
+            ${audio_directives}
+            \n 
+            `.trim();
+    }
 
     const startProduction = async () => {
         // Validasi input per section agar jelas pesan errornya bagi user
@@ -129,8 +142,8 @@ const GenerateContent: React.FC = () => {
                 min_duration: form_data.min_duration,
                 object_storage_id: form_data.object_storage_id,
                 bucket: form_data.bucket,
-                model_video : form_data.model_video,
-                gemini_api_key_id: form_data.gemini_api_key_id,
+                // model_video : form_data.model_video,
+                // gemini_api_key_id: form_data.gemini_api_key_id,
             };
 
             const ugc_response = await mabarApi.initUGC(ugc_payload);
@@ -159,9 +172,9 @@ const GenerateContent: React.FC = () => {
                 return { ...c, b64 };
             }));
 
-            let have_completed_once = false;
             // generate locked first product image
             const product_b64_locked = await aiService.generateLockedProductImage(product_b64, form_data.aspect_ratio);
+            let have_completed_once = false;
             for (let i = 0; i < form_data.amount; i++) {
                 const ugc_item = ugc_response.items?.[i];
                 if (!ugc_item) continue;
@@ -181,210 +194,62 @@ const GenerateContent: React.FC = () => {
                     let storyboard_chunks: any[] = await storyBoardChunk(target_product, target_chars);
                     await mabarApi.setStoryboard(global_ugc_id!, ugc_item_id, storyboard_chunks);
 
-
                     await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_FIRST_SCENE_IMAGE);
                     set_generations_list(prev => prev.map(g => g.id === temp_id ? {
                         ...g,
                         status: TaskStatus.GENERATING_FIRST_SCENE_IMAGE,
-                        progress: 40
+                        progress: 60,
+                        storyboard_data: storyboard_chunks
                     } : g));
 
-                    let previous_local_video_url = null;
-                    let last_video_blob: Blob | null = null;
+                    let last_scene_b64 = null;
+                    let base64_scene_images: string[] = [];
+                    let image_to_video_prompts = [];
                     for (let s_idx = 0; s_idx < storyboard_chunks.length; s_idx++) {
-                        let video_blob = null;
-                        let voiceover_audio_blob = null;
-                        let json_describe = null;
+                        let veo_prompt = ``;
+                        // concat description + map concat scenes.veo_visual_prompt with identity per scene number , exaple scene {scene_number}: {veo_visual_prompt}
+                        veo_prompt += storyboard_chunks[s_idx].description + " ";
+                        veo_prompt += storyboard_chunks[s_idx].scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
 
-                        if (s_idx === 0) {
+                        // IMPROVEMENT: Pass target_chars_with_b64 for consistency and multiple character support
+                        const b64 = (s_idx === 0) ? await aiService.generateFirstSceneImage(
+                            "",
+                            veo_prompt,
+                            form_data.prompt,
+                            storyboard_chunks[s_idx],
+                            product_b64_locked,
+                            target_chars_with_b64,
+                            form_data.aspect_ratio
+                        ) : await aiService.generateNextSceneImage(
+                            "",
+                            veo_prompt,
+                            form_data.prompt,
+                            storyboard_chunks[s_idx],
+                            last_scene_b64,
+                            target_chars_with_b64,
+                            form_data.aspect_ratio
+                        )
 
-                            let veo_prompt = ``;
-                            // concat description + map concat scenes.veo_visual_prompt with identity per scene number , exaple scene {scene_number}: {veo_visual_prompt}
-                            veo_prompt += storyboard_chunks[s_idx].description + " ";
-                            veo_prompt += storyboard_chunks[s_idx].scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
+                        let mimeType = getMimeTypeFromBase64(b64);
 
-                            // IMPROVEMENT: Pass target_chars_with_b64 for consistency and multiple character support
-                            const b64 = await aiService.generateFirstSceneImage(
-                                api_key,
-                                veo_prompt,
-                                form_data.prompt,
-                                storyboard_chunks[s_idx],
-                                product_b64_locked,
-                                target_chars_with_b64,
-                                form_data.aspect_ratio
-                            );
+                        let blob = base64ToBlob(b64, mimeType);
 
-                            let mimeType = getMimeTypeFromBase64(b64);
+                        await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
 
-                            let blob = base64ToBlob(b64, mimeType);
+                        last_scene_b64 = b64;
+                        base64_scene_images.push(b64);
 
-                            await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
-
-                            // generate video by scene image
-                            await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
-                            set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                                ...g,
-                                status: TaskStatus.GENERATING_VIDEO,
-                                progress: 70
-                            } : g));
-
-                            if (form_data.model_video === MODEL_VIDEOS["veo-3.0-preview"]) {
-
-                                video_blob =
-                                    await aiService.generateVideoVeo30FastPreviewImageToVideo(
-                                        b64,                 // FIRST SCENE IMAGE
-                                        veo_prompt,          // storyboard + scene prompt
-                                        form_data.aspect_ratio
-                                    );
-
-                            }else if(form_data.model_video === MODEL_VIDEOS["veo-3.1"]){
-                                video_blob = await aiService.generateVideoVeo31(api_key, b64, veo_prompt, form_data.aspect_ratio, target_chars, form_data.resolution, storyboard_chunks[s_idx]);
-                            }else{
-                                // if model_video is veo-3.0
-                                // analyze image first scene to describe prompt image
-
-                                // set step analyze scene
-                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.ANALYZING_SCENE);
-
-                                json_describe = await aiService.analyzeFirstSceneImage(b64, veo_prompt, target_chars, target_product);
-
-
-                                // set analyze scene to mabar api
-                                await mabarApi.setAnalyzeScene(global_ugc_id!, ugc_item_id, JSON.stringify(json_describe));
-
-                                // const describe_image_prompt = json_describe.description_first_image;
-                                //
-                                // console.log("[StartProduction] VEO Prompt for first scene video:", veo_prompt);
-
-                                const veoAnalysis =
-                                    await aiService.analyzeSceneForVeo(
-                                        b64,
-                                        json_describe.description_first_image
-                                    );
-
-                                video_blob = await aiService.generateVideoVeo30WithAudio(veoAnalysis, json_describe, form_data.aspect_ratio);
-                            }
-                        } else {
-                            // get last captured image from previous video
-                            // ===== SCENE LANJUTAN =====
-                            if (!previous_local_video_url) {
-                                throw new Error("Previous video URL not found");
-                            }
-
-                            // 🔑 AMBIL LAST FRAME VIDEO SEBELUMNYA
-                            const last_b64_image = await captureLastFrameFromVideoBlob(
-                                last_video_blob,
-                                (p) => {
-                                    console.log(`Capturing last frame progress: ${p}%`);
-                                },
-                                0.12 // epsilon → detik sebelum akhir
-                            );
-
-                            let mimeType = getMimeTypeFromBase64(last_b64_image);
-
-                            console.log("[StartProduction] Last frame base64 for next scene:", last_b64_image);
-
-                            let blob = base64ToBlob(last_b64_image, mimeType);
-
-                            console.log("[StartProduction] Last frame blob for next scene:", blob);
-
-                            await mabarApi.setFirstSceneImage(global_ugc_id!, ugc_item_id, blob, s_idx + 1);
-
-                            // generate video by scene image
-                            await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.GENERATING_VIDEO);
-                            set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                                ...g,
-                                status: TaskStatus.GENERATING_VIDEO,
-                                progress: 70
-                            } : g));
-
-                            const currentScene = storyboard_chunks[s_idx];
-
-                            let veoPrompt = ``;
-                            veoPrompt += currentScene.description + " ";
-                            veoPrompt += currentScene.scenes.map((sc: any) => `Scene ${sc.scene_number}: ${sc.veo_visual_prompt}`).join(" ");
-
-                            let scene_index = s_idx + 1;
-                            console.log("[StartProduction] VEO Prompt for next scene video ke :" + scene_index, veoPrompt);
-                            if (form_data.model_video === MODEL_VIDEOS["veo-3.0-preview"]) {
-
-                                video_blob =
-                                    await aiService.generateVideoVeo30FastPreviewImageToVideo(
-                                        last_b64_image,                 // FIRST SCENE IMAGE
-                                        veoPrompt,          // storyboard + scene prompt
-                                        form_data.aspect_ratio
-                                    );
-
-                            } else if(form_data.model_video === MODEL_VIDEOS["veo-3.1"]) {
-                                video_blob = await aiService.generateVideoVeo31(api_key, last_b64_image, veoPrompt, form_data.aspect_ratio, target_chars, form_data.resolution, storyboard_chunks[s_idx]);
-                            }else{
-                                // set step analyze scene
-                                await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.ANALYZING_SCENE);
-
-                                // if model_video is veo-3.0
-                                // analyze image first scene to describe prompt image
-                                json_describe = await aiService.analyzeFirstSceneImage(last_b64_image, veoPrompt, target_chars, target_product);
-
-                                const veoAnalysis =
-                                    await aiService.analyzeSceneForVeo(
-                                        last_b64_image,
-                                        json_describe.description_first_image
-                                    );
-
-                                video_blob = await aiService.generateVideoVeo30WithAudio(veoAnalysis, json_describe, form_data.aspect_ratio);
-                                // generate voiceover
-                            }
-                        }
-
-                        await mabarApi.setVideoFileItem(global_ugc_id!, ugc_item_id, video_blob, s_idx + 1);
-
-                        // if(form_data.model_video === MODEL_VIDEOS["veo-3.0"]){
-                        //     const pcmBlob = await aiService.generateTTSFromAnalysis(json_describe);
-                        //     const pcmArray = new Uint8Array(await pcmBlob.arrayBuffer());
-                        //     const wavBlob = pcmToWav(pcmArray, 24000);
-                        //
-                        //     // 🔑 SIMPAN UNTUK UI
-                        //     voiceover_audio_blob = wavBlob;
-                        //
-                        //     await mabarApi.setVoiceOverFileItem(
-                        //         global_ugc_id!,
-                        //         ugc_item_id,
-                        //         wavBlob,
-                        //         s_idx + 1
-                        //     );
-                        // }
-
-
-                        const local_video_url = URL.createObjectURL(video_blob);
-                        const local_audio_url = voiceover_audio_blob ? URL.createObjectURL(voiceover_audio_blob) : null;
-
-                        // add generate_urls to generation item with push (append)
-                        // get current generate_urls
-                        const current_item = generations_list.find(g => g.id === temp_id);
-
-                        const current_urls = current_item?.generate_urls || [];
-                        // current_audios must be array of objects with key current_index
-                        const current_audios = current_item?.local_audio_urls || [];
-                        const current_local_audio_obj = local_audio_url ? { scene_index: s_idx + 1, url: local_audio_url } : null;
-                        set_generations_list(prev => prev.map(g => g.id === temp_id ? {
-                            ...g,
-                            generate_urls: [...current_urls, local_video_url],
-                            local_audio_urls: [...current_audios, ...(current_local_audio_obj ? [current_local_audio_obj] : [])],
-                            status: TaskStatus.UPLOADING_S3
-                        } : g));
-
-                        previous_local_video_url = local_video_url;
-                        last_video_blob = video_blob;
+                        image_to_video_prompts.push(standardImageToVideoPrompt(veo_prompt, form_data.negative_prompt, target_chars));
                     }
 
-                    await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.UPLOADING_S3);
-                    set_generations_list(prev => prev.map(g => g.id === temp_id ? { ...g, status: TaskStatus.UPLOADING_S3, progress: 85 } : g));
+                    // await mabarApi.setStep(global_ugc_id!, ugc_item_id, TaskStatus.UPLOADING_S3);
+                    // set_generations_list(prev => prev.map(g => g.id === temp_id ? { ...g, status: TaskStatus.UPLOADING_S3, progress: 85 } : g));
 
                     try {
                         // const s3_url = await s3Service.uploadVideoToS3(video_blob, target_storage, form_data.bucket, filename);
                         await mabarApi.setCompleteItem(global_ugc_id!, ugc_item_id);
                         have_completed_once = true;
-                        set_generations_list(prev => prev.map(g => g.id === temp_id ? { ...g, status: TaskStatus.COMPLETED, progress: 100 } : g));
+                        set_generations_list(prev => prev.map(g => g.id === temp_id ? { ...g, status: TaskStatus.COMPLETED, progress: 100, base64_scene_images: base64_scene_images, image_to_video_prompts } : g));
                     } catch (s3_err: any) {
                         console.error("[StartProduction] S3 Upload Failed, keeping local URL", s3_err);
                         const reason = `[S3 Error] ${s3_err.message || "Upload gagal"}`;
@@ -477,36 +342,6 @@ const GenerateContent: React.FC = () => {
         });
     };
 
-    const changeApiKey = (changed_value) => {
-        console.log("Changed API Key Gemini:", changed_value);
-
-        // 1. Cek apakah changed_value ada
-        // 2. Cek apakah changed_value.item ada
-        if (!changed_value || !changed_value.item) {
-            localStorage.setItem("api_key", process.env.API_KEY)
-            set_api_key(null);
-            set_form_data({ ...form_data, gemini_api_key_id: null });
-            return;
-        }
-
-        const item = changed_value.item;
-
-        // Pastikan properti key_value memang ada di dalam item
-        if (item && item.key_value) {
-            localStorage.setItem("api_key", item.key_value)
-            set_api_key(item.key_value);
-            set_form_data({ ...form_data, gemini_api_key_id: changed_value.value });
-            showToast("API Key Gemini diperbarui", "success");
-        } else {
-            console.error("Properti key_value tidak ditemukan dalam item:", item);
-        }
-    }
-
-
-    useEffect(() => {
-        console.log("[API Key] Updated:", api_key);
-        console.log("[FormData] Updated:", form_data);
-    }, [api_key, form_data]);
 
     return (
         <div className="p-8 max-w-[1920px] mx-auto space-y-8 animate-in fade-in duration-500">
@@ -527,50 +362,6 @@ const GenerateContent: React.FC = () => {
                                 <div className="space-y-3">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Judul</label>
                                     <input type="text" value={form_data.name} onChange={e => set_form_data({...form_data, name: e.target.value})} className="w-full bg-slate-900/50 border border-blue-500/20 rounded-xl px-4 py-3 text-sm text-white focus:border-blue-500 focus:ring-1 ring-blue-500/50 outline-none font-semibold transition-all placeholder:text-slate-600" placeholder="Input Nama..." />
-                                </div>
-
-                                {/*create select option for model_video from MODEL_VIDEOS constant*/}
-                                <div className="space-y-3 hidden">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Model Video</label>
-                                    <select value={form_data.model_video} onChange={e => set_form_data({...form_data, model_video: e.target.value})} className="w-full bg-slate-950 border border-white/10 rounded-xl px-4 py-3 text-xs text-white outline-none focus:ring-1 ring-blue-500 transition-all">
-                                        {Object.entries(MODEL_VIDEOS).map(([label, key]) => (
-                                            <option key={label} value={key}>
-                                                {/*{(label === "veo-3.0" ? "Model 3.0 (Tanpa Suara)" : "Model 3.1 (Wajib Pilih Api Key & Set Billing Api Key)")}*/}
-                                                {/*using if else to show label*/}
-                                                {label === "veo-3.0" && "Model 3.0 (Text To Video (Free Beta))"}
-                                                {label === "veo-3.0-preview" && "Model 3.0 Preview (Image To Video Free Beta)"}
-                                                {label === "veo-3.1" && "Model 3.1 (Wajib Pilih Api Key & Set Billing Api Key)"}
-                                            </option>
-                                        ))}
-                                    </select>
-                                    {/*tambahkan note dengan warna information untuk saat ini pakai if select ada note model 3.0 masih gratis karena beta (sewaktu waktu bisa berubah tergantung kebijakan google), ketika select 3.0 ada note model 3.1 menggunakan biaya dari api key gemini yang dipilih dan wajib setting billing di gcp console */}
-                                    <div className="text-[10px] text-slate-500 italic text-orange-400">
-                                        {form_data.model_video === MODEL_VIDEOS["veo-3.0"] ? (
-                                            <>Note: Model 3.0 masih gratis karena dalam tahap beta. (Kebijakan dapat berubah sewaktu-waktu)</>
-                                        ) : (
-                                            <>Note: Model 3.1 menggunakan biaya dari API Key Gemini yang dipilih. Pastikan Anda telah mengatur billing di GCP Console.</>
-                                        )}
-                                    </div>
-
-                                </div>
-
-                                {/*if model_video is "veo-3.1", show select2 (using Select2 Component ) for get api keys mabarService.getApiKeys()*/}
-                                {/*if model_video is veo-3.0 hide select2 for api keys*/}
-                                <div className={form_data.model_video === MODEL_VIDEOS["veo-3.1"] ? "block" : "hidden"}>
-                                    <Select2Async
-                                        label="Pilih API Key Gemini"
-                                        endpoint={`${API_BASE_URL}/api_keys`}
-                                        placeholder="Cari Key..."
-                                        mapResponse={(data) => {
-                                            const key_managements = data?.key_managements || [];
-                                            return key_managements.map((k: any) => ({
-                                                value: k.id.toString(),
-                                                label: k.key_name,
-                                                item: k // Pastikan 'k' memiliki properti 'key_value'
-                                            }));
-                                        }}
-                                        onChange={(val) => changeApiKey(val)}
-                                    />
                                 </div>
 
                                 <div className="space-y-4">
@@ -699,39 +490,82 @@ const GenerateContent: React.FC = () => {
                                             </div>
 
                                             <div className="bg-slate-900 rounded-2xl border border-white/5 relative overflow-hidden group/vid shadow-inner p-4">
-                                                {item.generate_urls && item.generate_urls.length > 0 ? (
+                                                {item.storyboard_data && item.storyboard_data.length > 0 ? (
                                                     /* Menggunakan Grid agar jika ada > 1 video, tampilannya tetap rapi */
                                                     <div className="grid grid-cols-1 gap-6">
-                                                        {item.generate_urls.map((url, index) => {
+                                                        {item.storyboard_data.map((storyboard, index) => {
                                                             const sceneIndex = index + 1;
-                                                            const audioObj = item.local_audio_urls?.find(
-                                                                a => a.scene_index === sceneIndex
-                                                            );
-
+                                                            const base64_scene_images = item.base64_scene_images || [];
+                                                            const storyboard_scene_json = JSON.stringify(storyboard);
+                                                            const image_to_video_prompt = item.image_to_video_prompts?.[index] || "No prompt available";
                                                             return (
-                                                                <div key={url} className="flex flex-col space-y-3">
-                                                                    {/* Video Container dengan Aspect Ratio yang konsisten */}
-                                                                    <div className="aspect-video w-full overflow-hidden rounded-xl bg-black/20">
-                                                                        <video
-                                                                            src={url}
-                                                                            className="w-full h-full object-cover"
-                                                                            controls
-                                                                            playsInline
-                                                                        />
+                                                                // add image with object fit and contain , and the button is block json and can be copied to clipboard, and if click show the image in large preview modal
+                                                                <div className="flex flex-col space-y-2">
+
+                                                                    {/* IMAGE BOX */}
+                                                                    <div className="aspect-video bg-slate-800 rounded-xl overflow-hidden border border-white/5 shadow-inner">
+                                                                        {base64_scene_images[sceneIndex - 1] ? (
+                                                                            <img
+                                                                                src={ensureDataUrl(base64_scene_images[sceneIndex - 1])}
+                                                                                className="w-full h-full object-contain bg-black"
+                                                                            />
+                                                                        ) : (
+                                                                            <div className="w-full h-full flex items-center justify-center text-slate-500">
+                                                                                <i className="fas fa-image text-4xl"></i>
+                                                                            </div>
+                                                                        )}
                                                                     </div>
 
-                                                                    {/* Audio Player di bawah video */}
-                                                                    {audioObj && (
-                                                                        <div className="bg-white/5 p-2 rounded-lg">
-                                                                            <audio
-                                                                                src={audioObj.url}
-                                                                                className="w-full h-8"
-                                                                                controls
-                                                                                playsInline
-                                                                            />
+                                                                    {/* JSON BLOCK (OUTSIDE aspect-video) */}
+                                                                    <div className="relative">
+                                                                        <div className="flex items-center justify-between bg-slate-900 px-4 py-2 rounded-t-lg border border-white/10">
+                                                                            <span className="text-xs font-mono text-slate-400 uppercase">
+                                                                                Scene Data {sceneIndex}
+                                                                            </span>
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    navigator.clipboard.writeText(storyboard_scene_json);
+                                                                                    showToast("JSON copied!", "success");
+                                                                                }}
+                                                                                className="text-xs bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-3 py-1 rounded transition-colors"
+                                                                            >
+                                                                                Copy JSON
+                                                                            </button>
                                                                         </div>
-                                                                    )}
+
+                                                                        <div className="bg-slate-950 p-4 rounded-b-lg border border-white/10 max-h-60 overflow-y-auto">
+                                                                            <pre className="text-[11px] font-mono text-emerald-400 whitespace-pre-wrap break-all">
+                                                                                {JSON.stringify(storyboard, null, 2)}
+                                                                            </pre>
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {/* JSON BLOCK (OUTSIDE aspect-video) */}
+                                                                    <div className="relative">
+                                                                        <div className="flex items-center justify-between bg-slate-900 px-4 py-2 rounded-t-lg border border-white/10">
+                                                                            <span className="text-xs font-mono text-slate-400 uppercase">
+                                                                                Prompt {sceneIndex}
+                                                                            </span>
+                                                                            <button
+                                                                                onClick={() => {
+                                                                                    navigator.clipboard.writeText(image_to_video_prompt);
+                                                                                    showToast("JSON copied!", "success");
+                                                                                }}
+                                                                                className="text-xs bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white px-3 py-1 rounded transition-colors"
+                                                                            >
+                                                                                Copy Prompt
+                                                                            </button>
+                                                                        </div>
+
+                                                                        <div className="bg-slate-950 p-4 rounded-b-lg border border-white/10 max-h-60 overflow-y-auto">
+                                                                            <pre className="text-[11px] font-mono text-emerald-400 whitespace-pre-wrap break-all">
+                                                                                {image_to_video_prompt}
+                                                                            </pre>
+                                                                        </div>
+                                                                    </div>
+
                                                                 </div>
+
                                                             );
                                                         })}
                                                     </div>
@@ -747,7 +581,7 @@ const GenerateContent: React.FC = () => {
                                                 )}
 
                                                 {/* Overlay Loading Status */}
-                                                {(!item.generate_urls || item.generate_urls.length === 0) && item.status !== TaskStatus.FAILED && (
+                                                {(!item.base64_scene_images || item.base64_scene_images.length === 0) && item.status !== TaskStatus.FAILED && (
                                                     <div className="absolute inset-0 bg-blue-600/5 flex items-center justify-center backdrop-blur-[1px]">
                                                         <i className="fas fa-cog fa-spin text-blue-500/50 text-xl"></i>
                                                     </div>

@@ -5,6 +5,7 @@ import { mabarApi } from './services/mabarService';
 import GenerateContent from './pages/GenerateContent';
 import NotAuthorized from './pages/NotAuthorized';
 import Settings from './pages/Settings';
+import UsageGuide from './pages/UsageGuide';
 import { User } from './types';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
@@ -12,13 +13,9 @@ import Footer from './components/Footer';
 import { USING_DUMMY_DATA } from './constants';
 import { showToast } from './utils';
 import FrameCaptureTest from "./pages/FrameCaptureTest";
-
-declare const google: any;
-
-const GOOGLE_CLIENT_ID = "47005254759-dgl4i9gs2jk815fc4nm7booa3fbskou6.apps.googleusercontent.com";
+import GenerateSceneImage from "@/pages/GenerateSceneImage";
 
 const App: React.FC = () => {
-  // Inisialisasi state user secara sinkron dari localStorage
   const [user_profile, set_user_profile] = useState<User | null>(() => {
     const saved_user = localStorage.getItem('user-mabar');
     const token = localStorage.getItem('token-mabar');
@@ -31,82 +28,25 @@ const App: React.FC = () => {
   });
 
   const [google_id_token, set_google_id_token] = useState<string | null>(null);
-  const [is_loading, set_is_loading] = useState(!user_profile); // Loading hanya jika cache kosong
+  const [is_loading, set_is_loading] = useState(!user_profile);
   const [is_key_selected, set_is_key_selected] = useState<boolean>(false);
   const [api_key_hint, set_api_key_hint] = useState<string>('');
   const [api_key_label, set_api_key_label] = useState<string>('');
   const [is_sidebar_open, set_is_sidebar_open] = useState(false);
 
-  const getAiStudio = () => (window as any).aistudio;
-
-  console.log("USING_DUMMY_DATA:", USING_DUMMY_DATA);
-
   const update_key_status = useCallback(async () => {
-    const manual_key = localStorage.getItem('api_key_override');
+    const manual_key = localStorage.getItem('api_key_override') || localStorage.getItem('api_key');
     if (manual_key) {
       set_is_key_selected(true);
       set_api_key_hint(manual_key.slice(-4));
-      set_api_key_label(localStorage.getItem('manual_key_label') || 'Manual Key');
-      return;
+      set_api_key_label(localStorage.getItem('manual_key_label') || 'Active Key');
     }
-
-    // const ai_studio = getAiStudio();
-    // if (ai_studio?.hasSelectedApiKey) {
-    //   try {
-    //     const has_key = await ai_studio.hasSelectedApiKey();
-    //     set_is_key_selected(has_key);
-    //
-    //     if (has_key && process.env.API_KEY) {
-    //       const full_key = process.env.API_KEY;
-    //       set_api_key_hint(full_key.slice(-4));
-    //       try {
-    //         const remote_keys = await mabarApi.getApiKeys();
-    //         const matched_key = remote_keys.find(k => full_key.startsWith(k.key_prefix));
-    //         set_api_key_label(matched_key ? matched_key.label : 'Generative Project');
-    //       } catch (e) {
-    //         set_api_key_label('Generative Project');
-    //       }
-    //     } else {
-    //       set_api_key_hint('');
-    //       set_api_key_label('Belum Terdeteksi');
-    //     }
-    //   } catch (err) {
-    //     set_is_key_selected(false);
-    //   }
-    // } else {
-    //   set_is_key_selected(!!process.env.API_KEY);
-    //   set_api_key_hint(process.env.API_KEY ? process.env.API_KEY.slice(-4) : '');
-    //   set_api_key_label('Developer Sandbox');
-    // }
   }, []);
-
-  // const handle_google_callback = useCallback((response: any) => {
-  //   if (response.credential) {
-  //     set_google_id_token(response.credential);
-  //     showToast("Identity Verified", "success");
-  //   }
-  // }, []);
-
-  // const init_google_identity = useCallback(() => {
-  //   if (typeof google !== 'undefined' && GOOGLE_CLIENT_ID) {
-  //     try {
-  //       google.accounts.id.initialize({
-  //         client_id: GOOGLE_CLIENT_ID,
-  //         callback: handle_google_callback,
-  //         auto_select: false,
-  //         ux_mode: 'popup'
-  //       });
-  //     } catch (err) { console.error(err); }
-  //   }
-  // }, [handle_google_callback]);
 
   const check_auth = useCallback(async (show_success_toast = false) => {
     const token = localStorage.getItem('token-mabar');
-    console.log("[App] Checking Auth, token present:", !!token);
-
     if (!USING_DUMMY_DATA && !token) {
       set_user_profile(null);
-      localStorage.removeItem('user-mabar');
       set_is_loading(false);
       return;
     }
@@ -119,14 +59,9 @@ const App: React.FC = () => {
         if (show_success_toast) showToast(`Selamat datang kembali, ${user_data.name}`, "success");
       }
     } catch (error: any) {
-      console.error("[App] Auth Verification Failed:", error);
-
-      // Hanya hapus kredensial jika error adalah 401 (Unauthorized)
-      // Jika error network/tunnel ngrok, tetap biarkan user masuk menggunakan cache
       if (error.response?.status === 401) {
         localStorage.removeItem('token-mabar');
         localStorage.removeItem('user-mabar');
-        localStorage.removeItem('machine_id');
         set_user_profile(null);
       }
     } finally {
@@ -135,16 +70,9 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    // update_key_status();
+    update_key_status();
     check_auth();
-    // const check_google = setInterval(() => {
-    //   if (typeof google !== 'undefined') {
-    //     init_google_identity();
-    //     clearInterval(check_google);
-    //   }
-    // }, 500);
-    // return () => clearInterval(check_google);
-  }, [ update_key_status]);
+  }, [update_key_status]);
 
   if (is_loading) {
     return (
@@ -177,6 +105,8 @@ const App: React.FC = () => {
             <main className="flex-1 overflow-y-auto custom-scrollbar bg-slate-900/30 w-full">
               <Routes>
                 <Route path="/" element={user_profile ? <GenerateContent /> : <Navigate to="/not-authorized" replace />} />
+                <Route path="/guide" element={user_profile ? <UsageGuide /> : <Navigate to="/not-authorized" replace />} />
+                <Route path="/scene-image" element={user_profile ? <GenerateSceneImage /> : <Navigate to="/not-authorized" replace />} />
                 <Route path="/settings" element={user_profile ? <Settings user_email={user_profile.email} google_id_token={google_id_token} /> : <Navigate to="/not-authorized" replace />} />
                 <Route path="/not-authorized" element={user_profile ? <Navigate to="/" replace /> : <NotAuthorized onAuthUpdate={() => check_auth(true)} />} />
                 <Route path="/capture-test" element={<FrameCaptureTest />} />

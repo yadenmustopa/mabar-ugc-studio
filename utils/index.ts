@@ -138,3 +138,11 @@ export function pcmToWav(
 
   return new Blob([buffer], { type: "audio/wav" });
 }
+
+
+export const ensureDataUrl = (b64: string) => {
+  if (b64.startsWith("data:")) return b64;
+
+  const mime = getMimeTypeFromBase64(b64) || "image/png";
+  return `data:${mime};base64,${b64}`;
+};

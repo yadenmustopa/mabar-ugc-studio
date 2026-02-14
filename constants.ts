@@ -13,27 +13,44 @@ export const API_BASE_URL = IS_DEV ? `${BASE_URL_MABAR}/api/v3/ai_studio` : `${B
 export const URL_UPLOAD_ASSET = IS_DEV ? `${BASE_URL_MABAR}/proxy/fetch` : `${BASE_URL_MABAR}/proxy/fetch`;
 
 /**
- * KONFIGURASI MODEL REFERENSI (Google GenAI)
+ * MODEL HIERARCHY (Priority Based)
+ * Note: veo-3.0-fast-generate-001 sering menyebabkan error 404 karena identifier khusus Vertex AI.
  */
+export const MODEL_LISTS = {
+  STORYBOARD: [
+    'gemini-3-flash-preview',        // Priority 1: Smartest & Latest
+    'gemini-2.5-flash-lite-latest',  // Priority 2: Fast & High Quota
+    'gemini-2.0-flash'               // Priority 3: Stable
+  ],
+  IMAGE: [
+    'gemini-2.5-flash-image'         // Dedicated Image Gen
+  ],
+  VISION: [
+    'gemini-3-flash-preview',        // Multi-modal support for analysis
+    'gemini-2.0-flash'
+  ],
+  VIDEO: [
+    'veo-3.1-fast-generate-preview', // Pro/New
+    'veo-3.1-generate-preview',      // High Quality
+  ]
+};
+
 export const MODELS = {
-  STORYBOARD: 'gemini-3-flash-preview',
-  // STORYBOARD: 'gemini-2.5-flash',
-  IMAGE: 'gemini-2.5-flash-image',
-  // VIDEO: 'veo-3.1-fast-generate-preview',
-  VIDEO:  'veo-3.0-fast-generate-001',
-  VISION: 'gemini-2.0-flash'
+  STORYBOARD: MODEL_LISTS.STORYBOARD[0],
+  IMAGE: MODEL_LISTS.IMAGE[0],
+  VIDEO: MODEL_LISTS.VIDEO[0],
+  VISION: MODEL_LISTS.VISION[0]
 };
 
 export const MODEL_VIDEOS = {
-  'veo-3.0' : 'veo-3.0-fast-generate-001',
+  'veo-3.0' : 'veo-3.0-fast-generate-preview',
   'veo-3.0-preview' : 'veo-3.0-fast-generate-preview',
   'veo-3.1' : 'veo-3.1-fast-generate-preview',
-  // 'veo-3.1' : 'veo-3.1-generate-preview'
   'veo-3.1-preview' : 'veo-3.1-generate-preview'
 }
 
 export const PROJECT_ID = "ceremonial-rush-462106-a7";
-export const using_vertex = true; // Toggle penggunaan Vertex AI (true) atau API GenAI langsung (false)
+export const using_vertex = true;
 
 export const ALLOWED_GEMINI_VOICES = new Set([
   "achernar","aoede","autonoe","callirrhoe","despina","erinome",

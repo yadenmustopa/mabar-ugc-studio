@@ -68,8 +68,20 @@ export interface GenerationItem {
   progress: number;
   generate_urls?: Array<string>;
   failed_reason?: string;
-  storyboard_data?: any;
+  storyboard_data?: [Object];
   local_audio_urls?: Array<{ scene_index: number; url: string }>;
+}
+
+export interface GenerationSceneImageItem {
+  id: string;
+  ugc_id: string;
+  order_index: number;
+  status: TaskStatus;
+  progress: number;
+  failed_reason?: string;
+  storyboard_data?: [Object];
+  base64_scene_images?: string[];
+  image_to_video_prompts?: string[];
 }
 
 export interface UGC {
